@@ -334,7 +334,7 @@ def chat(user_message: str, conversation_history: list, session_data: dict) -> t
             # End turn — extract text response
             response_text = ""
             for block in response.content:
-                if hasattr(block, "text"):
+                if block.type == "text":
                     response_text += block.text
 
             # Quality verification loop (skip for very short responses)
@@ -360,7 +360,7 @@ def chat(user_message: str, conversation_history: list, session_data: dict) -> t
                     )
                     revised_text = ""
                     for block in revision.content:
-                        if hasattr(block, "text"):
+                        if block.type == "text":
                             revised_text += block.text
                     if revised_text:
                         # Replace the last two messages with the clean version
