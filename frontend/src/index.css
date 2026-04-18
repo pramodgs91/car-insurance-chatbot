@@ -405,6 +405,10 @@ button { cursor: pointer; background: none; border: none; color: inherit; }
 
 .input-wrapper textarea::placeholder { color: var(--gray-400); }
 
+@media (max-width: 480px) {
+  .input-wrapper textarea::placeholder { font-size: 13px; }
+}
+
 .send-btn {
   width: 44px; height: 44px;
   background: var(--primary);

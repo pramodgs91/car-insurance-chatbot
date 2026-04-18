@@ -79,6 +79,8 @@ export default function Chat({ onOpenAdmin }) {
   const messagesEndRef = useRef(null)
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
+  // Tracks the live sessionId for async multi-file upload loops (state is stale in closures)
+  const sessionIdRef = useRef(null)
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
@@ -86,14 +88,17 @@ export default function Chat({ onOpenAdmin }) {
     })
   }, [])
 
+  // Only scroll when a discrete message is added — NOT on every streaming token.
+  // This lets the user read from the top of a long bot reply without the view jumping.
   useEffect(() => {
     scrollToBottom()
-  }, [messages, progressEvents, streamingText, loading, scrollToBottom])
+  }, [messages, scrollToBottom])
 
   // ── Shared SSE event handler ───────────────────────────────────────
   const handleEvent = (evt) => {
     if (evt.type === 'session') {
       setSessionId(evt.session_id)
+      sessionIdRef.current = evt.session_id
     } else if (evt.type === 'progress' || evt.type === 'tool_start') {
       setProgressEvents((p) => [
         ...p,
@@ -154,34 +159,37 @@ export default function Chat({ onOpenAdmin }) {
   }
 
   const handleFileChange = async (e) => {
-    const file = e.target.files?.[0]
+    const files = Array.from(e.target.files || [])
     e.target.value = '' // allow re-upload of same filename later
-    if (!file) return
-    if (file.size > 10 * 1024 * 1024) {
-      setMessages((m) => [
-        ...m,
-        { role: 'bot', content: 'That file is larger than 10 MB. Please compress or try a different one.' },
-      ])
-      return
-    }
+    if (!files.length) return
 
-    setStarted(true)
-    setUx(null)
-    setMultiSelection([])
-    setMessages((m) => [...m, { role: 'attachment', content: file.name }])
-    setProgressEvents([])
-    setStreamingText('')
-    setLoading(true)
+    for (const file of files) {
+      if (file.size > 10 * 1024 * 1024) {
+        setMessages((m) => [
+          ...m,
+          { role: 'bot', content: `${file.name} is larger than 10 MB. Please compress or try a different one.` },
+        ])
+        continue
+      }
 
-    try {
-      await uploadDocument({ file, sessionId, onEvent: handleEvent })
-    } catch (err) {
-      setMessages((m) => [
-        ...m,
-        { role: 'bot', content: `Couldn't upload: ${err.message}` },
-      ])
-    } finally {
-      setLoading(false)
+      setStarted(true)
+      setUx(null)
+      setMultiSelection([])
+      setMessages((m) => [...m, { role: 'attachment', content: file.name }])
+      setProgressEvents([])
+      setStreamingText('')
+      setLoading(true)
+
+      try {
+        await uploadDocument({ file, sessionId: sessionIdRef.current, onEvent: handleEvent })
+      } catch (err) {
+        setMessages((m) => [
+          ...m,
+          { role: 'bot', content: `Couldn't upload ${file.name}: ${err.message}` },
+        ])
+      } finally {
+        setLoading(false)
+      }
     }
   }
 
@@ -397,6 +405,7 @@ export default function Chat({ onOpenAdmin }) {
           ref={fileInputRef}
           type="file"
           accept={ACCEPTED_UPLOAD_TYPES}
+          multiple
           style={{ display: 'none' }}
           onChange={handleFileChange}
         />
