@@ -53,13 +53,21 @@ class InstructionBlock:
     enabled: bool = True
 
 
+# Bumping this migrates existing persisted configs forward. Each jump
+# applies the corresponding defaults once (see _migrate_defaults).
+CURRENT_DEFAULTS_VERSION = 2
+
+
 @dataclass
 class RuntimeConfigData:
     style: str = "salesy"
     rag_enabled: bool = True
-    evaluation_loop_enabled: bool = True
+    # QC adds a secondary LLM call per turn (~1-2s). Off by default for
+    # latency; admin can toggle on via the panel.
+    evaluation_loop_enabled: bool = False
     latency_optimizations_enabled: bool = True
     custom_instructions: list[InstructionBlock] = field(default_factory=list)
+    defaults_version: int = CURRENT_DEFAULTS_VERSION
 
 
 class RuntimeConfig:
@@ -144,6 +152,7 @@ class RuntimeConfig:
                 "evaluation_loop_enabled": self._data.evaluation_loop_enabled,
                 "latency_optimizations_enabled": self._data.latency_optimizations_enabled,
                 "custom_instructions": [asdict(b) for b in self._data.custom_instructions],
+                "defaults_version": self._data.defaults_version,
             }, f, indent=2)
 
     def _load(self) -> None:
@@ -154,10 +163,24 @@ class RuntimeConfig:
                 data = json.load(f)
             self._data.style = data.get("style", "salesy")
             self._data.rag_enabled = data.get("rag_enabled", True)
-            self._data.evaluation_loop_enabled = data.get("evaluation_loop_enabled", True)
+            self._data.evaluation_loop_enabled = data.get("evaluation_loop_enabled", False)
             self._data.latency_optimizations_enabled = data.get("latency_optimizations_enabled", True)
             self._data.custom_instructions = [
                 InstructionBlock(**b) for b in data.get("custom_instructions", [])
             ]
+            persisted_version = int(data.get("defaults_version", 1))
+            self._data.defaults_version = persisted_version
+            if persisted_version < CURRENT_DEFAULTS_VERSION:
+                self._migrate_defaults(persisted_version)
         except Exception:
             pass
+
+    def _migrate_defaults(self, from_version: int) -> None:
+        """Apply default changes to pre-existing persisted configs."""
+        if from_version < 2:
+            # v2: evaluation loop defaults to OFF (latency).
+            # Only flip if the persisted value matches the OLD default (True),
+            # so admins who explicitly turned it off aren't pestered.
+            self._data.evaluation_loop_enabled = False
+        self._data.defaults_version = CURRENT_DEFAULTS_VERSION
+        self._persist()

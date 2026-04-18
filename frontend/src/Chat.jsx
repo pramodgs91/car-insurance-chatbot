@@ -53,6 +53,7 @@ function UserMessage({ content }) {
 export default function Chat({ onOpenAdmin }) {
   const [messages, setMessages] = useState([])
   const [progressEvents, setProgressEvents] = useState([])
+  const [streamingText, setStreamingText] = useState('')
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [sessionId, setSessionId] = useState(null)
@@ -69,7 +70,7 @@ export default function Chat({ onOpenAdmin }) {
     })
   }, [])
 
-  useEffect(() => { scrollToBottom() }, [messages, progressEvents, loading, scrollToBottom])
+  useEffect(() => { scrollToBottom() }, [messages, progressEvents, streamingText, loading, scrollToBottom])
 
   const send = async (text) => {
     const msg = (text || '').trim()
@@ -80,6 +81,7 @@ export default function Chat({ onOpenAdmin }) {
     setMultiSelection([])
     setMessages((m) => [...m, { role: 'user', content: msg }])
     setProgressEvents([])
+    setStreamingText('')
     setLoading(true)
 
     if (textareaRef.current) textareaRef.current.style.height = '44px'
@@ -97,12 +99,21 @@ export default function Chat({ onOpenAdmin }) {
             setProgressEvents((p) =>
               p.length > 0 ? [...p.slice(0, -1), { ...p[p.length - 1], done: true }] : p
             )
+          } else if (evt.type === 'token') {
+            // Clear pills once actual text starts arriving.
+            setProgressEvents([])
+            setStreamingText((t) => t + (evt.text || ''))
+          } else if (evt.type === 'token_reset') {
+            // Model went into a tool call / revision — discard what we've shown.
+            setStreamingText('')
           } else if (evt.type === 'final') {
             setProgressEvents([])
+            setStreamingText('')
             setMessages((m) => [...m, { role: 'bot', content: evt.text }])
             setUx(evt.ux || null)
           } else if (evt.type === 'error') {
             setProgressEvents([])
+            setStreamingText('')
             setMessages((m) => [...m, { role: 'bot', content: `Sorry, something went wrong: ${evt.text}` }])
           }
         },
@@ -122,6 +133,7 @@ export default function Chat({ onOpenAdmin }) {
     setInput('')
     setUx(null)
     setProgressEvents([])
+    setStreamingText('')
     setMultiSelection([])
   }
 
@@ -284,7 +296,8 @@ export default function Chat({ onOpenAdmin }) {
           {progressEvents.map((p) => (
             <ProgressPill key={p.id} text={p.text} success={p.done} />
           ))}
-          {loading && progressEvents.length === 0 && <TypingDots />}
+          {streamingText && <BotMessage content={streamingText} />}
+          {loading && progressEvents.length === 0 && !streamingText && <TypingDots />}
           <div ref={messagesEndRef} />
         </div>
       )}
