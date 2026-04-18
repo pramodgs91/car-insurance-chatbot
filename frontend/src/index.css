@@ -272,11 +272,29 @@ button { cursor: pointer; background: none; border: none; color: inherit; }
   padding: 0 12px 8px;
   flex-shrink: 0;
   display: flex; flex-direction: column; gap: 8px;
+  max-height: 120px;
 }
 
 .suggestions {
   display: flex; flex-wrap: wrap; gap: 6px;
 }
+
+/* Horizontal-scroll row variant — keeps chips on one line on mobile
+   instead of wrapping and eating half the screen. */
+.scroll-row {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+  /* bleed edges so chips can scroll under the rounded corner */
+  margin: 0 -4px;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+.scroll-row::-webkit-scrollbar { display: none; }
+.scroll-row .chip { flex-shrink: 0; white-space: nowrap; }
 
 .chip {
   background: var(--white);
@@ -301,6 +319,16 @@ button { cursor: pointer; background: none; border: none; color: inherit; }
 .chip.choice.selected {
   background: var(--primary);
   color: var(--white);
+}
+
+.chip.upload-chip {
+  background: var(--primary);
+  color: var(--white);
+  border-color: var(--primary);
+}
+.chip.upload-chip:hover, .chip.upload-chip:active {
+  background: var(--primary-dark);
+  border-color: var(--primary-dark);
 }
 
 .structured-input {
@@ -333,6 +361,24 @@ button { cursor: pointer; background: none; border: none; color: inherit; }
 }
 
 .input-row { display: flex; gap: 8px; align-items: flex-end; }
+
+.attach-btn {
+  width: 44px; height: 44px;
+  background: var(--gray-100);
+  border: 1.5px solid var(--gray-200);
+  border-radius: 50%;
+  color: var(--gray-700);
+  font-size: 18px;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+.attach-btn:hover:not(:disabled) {
+  background: var(--primary-bg);
+  border-color: var(--primary-light);
+  color: var(--primary-dark);
+}
+.attach-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .input-wrapper { flex: 1; position: relative; }
 
@@ -373,8 +419,6 @@ button { cursor: pointer; background: none; border: none; color: inherit; }
 .send-btn:hover:not(:disabled) { background: var(--primary-dark); transform: scale(1.04); }
 .send-btn:disabled { background: var(--gray-300); cursor: not-allowed; }
 
-.powered-by { text-align: center; font-size: 10px; color: var(--gray-400); margin-top: 6px; }
-
 /* ── Welcome ──────────────────────────────────────────────────────── */
 
 .welcome {
@@ -395,23 +439,50 @@ button { cursor: pointer; background: none; border: none; color: inherit; }
   max-width: 320px; line-height: 1.5;
 }
 
-.welcome-features {
-  display: flex; flex-direction: column; gap: 10px;
-  width: 100%; max-width: 340px;
+.welcome-upload-cta {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--primary);
+  color: var(--white);
+  padding: 12px 20px;
+  border-radius: 24px;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 4px 10px rgba(108, 43, 217, 0.25);
+  transition: all 0.15s;
+}
+.welcome-upload-cta:hover, .welcome-upload-cta:active {
+  background: var(--primary-dark);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(108, 43, 217, 0.35);
+}
+.welcome-upload-cta span:first-child { font-size: 16px; }
+
+.welcome-or {
+  font-size: 12px;
+  color: var(--gray-400);
+  margin-top: 14px;
+  letter-spacing: 0.02em;
 }
 
-.feature-card {
-  display: flex; align-items: center; gap: 12px;
-  padding: 10px 14px;
-  background: var(--gray-50);
-  border: 1px solid var(--gray-200);
-  border-radius: 12px;
-  text-align: left;
-}
+/* ── Attachment message ───────────────────────────────────────────── */
 
-.feature-icon { font-size: 22px; flex-shrink: 0; }
-.feature-text { font-size: 12px; color: var(--gray-600); line-height: 1.4; }
-.feature-text strong { color: var(--gray-800); display: block; font-size: 13px; }
+.message.user .message-content.attachment {
+  background: var(--primary-bg);
+  color: var(--gray-800);
+  border: 1px solid var(--primary-light);
+  padding: 8px 12px;
+}
+.attachment-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary-dark);
+  word-break: break-all;
+}
+.attachment-hint {
+  font-size: 11px;
+  color: var(--gray-500);
+  margin-top: 2px;
+}
 
 /* ── Admin Panel ──────────────────────────────────────────────────── */
 

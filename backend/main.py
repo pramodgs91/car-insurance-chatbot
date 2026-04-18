@@ -18,6 +18,7 @@ from agent import Agent
 from rag import VectorStore, ingest_bytes, seed_defaults
 from admin import RuntimeConfig, AdminSession, verify_password
 from admin.auth import admin_configured
+from extraction import extract_from_upload, merge_into_session, format_for_agent
 
 
 # ── Paths ────────────────────────────────────────────────────────────────────
@@ -124,6 +125,58 @@ async def chat_non_streaming(req: ChatRequest):
         elif evt["type"] == "error":
             raise HTTPException(status_code=500, detail=evt["text"])
     return {"session_id": session_id, **final}
+
+
+@app.post("/api/chat/upload/stream")
+async def chat_upload_stream(
+    file: UploadFile = File(...),
+    session_id: str | None = Form(None),
+    doc_hint: str | None = Form(None),  # "rc_card" | "previous_policy" | None
+):
+    """
+    Accept an RC card or previous policy document (PDF/image), run vision
+    extraction, merge the fields into the session, and stream the agent's
+    next turn back as SSE.
+    """
+    sid = session_id or str(uuid.uuid4())
+    if sid not in sessions:
+        sessions[sid] = {"history": [], "data": {}}
+    session = sessions[sid]
+
+    data = await file.read()
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
+
+    filename = file.filename or "upload"
+
+    async def generate():
+        yield f"event: session\ndata: {json.dumps({'session_id': sid})}\n\n"
+        yield f"event: progress\ndata: {json.dumps({'type': 'progress', 'text': f'Reading {filename}...'})}\n\n"
+        try:
+            extracted = await extract_from_upload(data, file.content_type, filename, doc_hint)
+        except ValueError as exc:
+            yield f"event: error\ndata: {json.dumps({'type': 'error', 'text': str(exc)})}\n\n"
+            return
+        except RuntimeError as exc:
+            err_text = f"Couldn't read the document: {exc}"
+            yield f"event: error\ndata: {json.dumps({'type': 'error', 'text': err_text})}\n\n"
+            return
+
+        applied = merge_into_session(session["data"], extracted)
+        synthetic = format_for_agent(filename, extracted, applied)
+
+        summary_bits = [f"{k}: {v}" for k, v in applied.items()]
+        summary = ", ".join(summary_bits[:3]) if summary_bits else "no fields readable"
+        yield f"event: progress\ndata: {json.dumps({'type': 'progress', 'text': f'Extracted — {summary}'})}\n\n"
+
+        try:
+            async for evt in agent.stream(synthetic, session["history"], session["data"]):
+                yield f"event: {evt['type']}\ndata: {json.dumps(evt)}\n\n"
+        except Exception as exc:
+            err = {"type": "error", "text": str(exc)}
+            yield f"event: error\ndata: {json.dumps(err)}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @app.post("/api/reset")

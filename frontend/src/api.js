@@ -9,21 +9,11 @@ export async function resetSession(sessionId) {
   } catch {}
 }
 
-/**
- * Stream a chat turn via SSE. Calls `onEvent({type, ...})` for each event.
- * Returns a Promise that resolves when the stream ends (after 'final' or 'error').
- */
-export async function streamChat({ message, sessionId, onEvent, signal }) {
-  const res = await fetch(`${API_BASE}/chat/stream`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, session_id: sessionId }),
-    signal,
-  })
-  if (!res.ok || !res.body) {
-    throw new Error(`Stream failed: HTTP ${res.status}`)
+async function consumeSSE(response, onEvent) {
+  if (!response.ok || !response.body) {
+    throw new Error(`Stream failed: HTTP ${response.status}`)
   }
-  const reader = res.body.getReader()
+  const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
 
@@ -32,7 +22,6 @@ export async function streamChat({ message, sessionId, onEvent, signal }) {
     if (done) break
     buffer += decoder.decode(value, { stream: true })
 
-    // SSE events are separated by a blank line
     const parts = buffer.split('\n\n')
     buffer = parts.pop() || ''
     for (const part of parts) {
@@ -50,6 +39,37 @@ export async function streamChat({ message, sessionId, onEvent, signal }) {
       if (eventType === 'final' || eventType === 'error') return
     }
   }
+}
+
+/**
+ * Stream a chat turn via SSE. Calls `onEvent({type, ...})` for each event.
+ * Returns a Promise that resolves when the stream ends (after 'final' or 'error').
+ */
+export async function streamChat({ message, sessionId, onEvent, signal }) {
+  const res = await fetch(`${API_BASE}/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, session_id: sessionId }),
+    signal,
+  })
+  await consumeSSE(res, onEvent)
+}
+
+/**
+ * Upload an RC card or policy document; backend runs vision extraction
+ * then streams the agent's next turn via the same SSE contract.
+ */
+export async function uploadDocument({ file, sessionId, docHint, onEvent, signal }) {
+  const fd = new FormData()
+  fd.append('file', file)
+  if (sessionId) fd.append('session_id', sessionId)
+  if (docHint) fd.append('doc_hint', docHint)
+  const res = await fetch(`${API_BASE}/chat/upload/stream`, {
+    method: 'POST',
+    body: fd,
+    signal,
+  })
+  await consumeSSE(res, onEvent)
 }
 
 // ── Admin ────────────────────────────────────────────────────────────────
