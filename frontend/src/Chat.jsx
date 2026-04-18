@@ -1,7 +1,14 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { streamChat, uploadDocument, resetSession } from './api'
+import {
+  streamChat,
+  uploadDocument,
+  resetSession,
+  getPublicRuntimeConfig,
+  getVoiceGuide,
+  classifyVoiceIntent,
+} from './api'
 
 const INITIAL_SUGGESTIONS = [
   'I want to buy car insurance',
@@ -12,6 +19,7 @@ const INITIAL_SUGGESTIONS = [
 ]
 
 const ACCEPTED_UPLOAD_TYPES = '.pdf,.jpg,.jpeg,.png,.webp,image/*,application/pdf'
+const SPEED_RATES = { slow: 0.9, normal: 1, fast: 1.12 }
 
 function TypingDots() {
   return (
@@ -65,6 +73,10 @@ function AttachmentMessage({ name }) {
   )
 }
 
+function getSpeechLang(language) {
+  return language === 'hindi' ? 'hi-IN' : 'en-IN'
+}
+
 export default function Chat({ onOpenAdmin }) {
   const [messages, setMessages] = useState([])
   const [progressEvents, setProgressEvents] = useState([])
@@ -75,12 +87,32 @@ export default function Chat({ onOpenAdmin }) {
   const [ux, setUx] = useState(null)
   const [multiSelection, setMultiSelection] = useState([])
   const [started, setStarted] = useState(false)
+  const [runtimeConfig, setRuntimeConfig] = useState(null)
+  const [voicePrefs, setVoicePrefs] = useState({
+    outputEnabled: false,
+    inputEnabled: false,
+    language: 'english',
+    tone: 'friendly',
+    detailLevel: 'quick',
+    autoPlay: false,
+    interruptible: true,
+    speed: 'normal',
+  })
+  const [voiceStatus, setVoiceStatus] = useState('')
+  const [listening, setListening] = useState(false)
+  const [speechSupported, setSpeechSupported] = useState(false)
 
   const messagesEndRef = useRef(null)
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
-  // Tracks the live sessionId for async multi-file upload loops (state is stale in closures)
   const sessionIdRef = useRef(null)
+  const lastBotMessageRef = useRef('')
+  const uxRef = useRef(null)
+  const recognitionRef = useRef(null)
+  const spokenTextRef = useRef('')
+
+  const outputAvailable = runtimeConfig?.voice?.output_enabled ?? false
+  const inputAvailable = runtimeConfig?.voice?.input_enabled ?? false
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
@@ -88,14 +120,129 @@ export default function Chat({ onOpenAdmin }) {
     })
   }, [])
 
-  // Only scroll when a discrete message is added — NOT on every streaming token.
-  // This lets the user read from the top of a long bot reply without the view jumping.
   useEffect(() => {
     scrollToBottom()
   }, [messages, scrollToBottom])
 
-  // ── Shared SSE event handler ───────────────────────────────────────
-  const handleEvent = (evt) => {
+  useEffect(() => {
+    let cancelled = false
+    getPublicRuntimeConfig()
+      .then((cfg) => {
+        if (cancelled) return
+        setRuntimeConfig(cfg)
+        setVoicePrefs({
+          outputEnabled: Boolean(cfg.voice?.output_enabled),
+          inputEnabled: Boolean(cfg.voice?.input_enabled),
+          language: cfg.voice?.language || 'english',
+          tone: cfg.voice?.tone || 'friendly',
+          detailLevel: cfg.voice?.detail_level || 'quick',
+          autoPlay: Boolean(cfg.voice?.auto_play),
+          interruptible: cfg.voice?.interruptible !== false,
+          speed: cfg.voice?.speed || 'normal',
+        })
+      })
+      .catch(() => {})
+
+    const supported =
+      typeof window !== 'undefined' &&
+      (window.SpeechRecognition || window.webkitSpeechRecognition || window.speechSynthesis)
+    setSpeechSupported(Boolean(supported))
+
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.getVoices()
+    }
+
+    return () => {
+      cancelled = true
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel()
+      }
+      if (recognitionRef.current) {
+        recognitionRef.current.abort()
+      }
+    }
+  }, [])
+
+  const stopSpeaking = useCallback(() => {
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel()
+    }
+    spokenTextRef.current = ''
+  }, [])
+
+  const pickVoice = useCallback((lang) => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return null
+    const voices = window.speechSynthesis.getVoices()
+    if (!voices.length) return null
+    const preferredLang = getSpeechLang(lang)
+    return (
+      voices.find((voice) => voice.lang === preferredLang && /india|indian/i.test(voice.name)) ||
+      voices.find((voice) => voice.lang === preferredLang) ||
+      voices.find((voice) => voice.lang.startsWith(preferredLang.slice(0, 2)) && /india|indian/i.test(voice.name)) ||
+      voices.find((voice) => voice.lang.startsWith(preferredLang.slice(0, 2))) ||
+      null
+    )
+  }, [])
+
+  const speakText = useCallback((text) => {
+    if (!voicePrefs.outputEnabled || typeof window === 'undefined' || !window.speechSynthesis || !text) return
+    const synth = window.speechSynthesis
+    if (voicePrefs.interruptible) synth.cancel()
+    else if (synth.speaking) return
+
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.lang = getSpeechLang(voicePrefs.language)
+    utterance.rate = SPEED_RATES[voicePrefs.speed] || 1
+    const selectedVoice = pickVoice(voicePrefs.language)
+    if (selectedVoice) utterance.voice = selectedVoice
+
+    utterance.onstart = () => setVoiceStatus('Speaking...')
+    utterance.onend = () => {
+      if (spokenTextRef.current === text) setVoiceStatus('')
+      spokenTextRef.current = ''
+    }
+    utterance.onerror = () => {
+      if (spokenTextRef.current === text) setVoiceStatus('Voice playback failed')
+      spokenTextRef.current = ''
+    }
+
+    spokenTextRef.current = text
+    synth.speak(utterance)
+  }, [pickVoice, voicePrefs])
+
+  const requestVoiceGuide = useCallback(async ({
+    message,
+    nextUx,
+    stage,
+    query,
+    forcePlay = false,
+  }) => {
+    if (!message || !outputAvailable) return null
+    setVoiceStatus(query ? 'Explaining the current screen...' : 'Preparing voice guide...')
+    try {
+      const response = await getVoiceGuide({
+        message,
+        ux: nextUx,
+        stage,
+        query,
+        language: voicePrefs.language,
+        detail_level: voicePrefs.detailLevel,
+        tone: voicePrefs.tone,
+      })
+      const spoken = response.text || ''
+      if ((voicePrefs.autoPlay || forcePlay) && voicePrefs.outputEnabled) {
+        speakText(spoken)
+      } else {
+        setVoiceStatus(spoken ? `Voice ready: ${spoken}` : '')
+      }
+      return spoken
+    } catch (err) {
+      setVoiceStatus(`Voice unavailable: ${err.message}`)
+      return null
+    }
+  }, [outputAvailable, speakText, voicePrefs])
+
+  const handleEvent = useCallback((evt) => {
     if (evt.type === 'session') {
       setSessionId(evt.session_id)
       sessionIdRef.current = evt.session_id
@@ -114,10 +261,22 @@ export default function Chat({ onOpenAdmin }) {
     } else if (evt.type === 'token_reset') {
       setStreamingText('')
     } else if (evt.type === 'final') {
+      const nextUx = evt.ux || null
       setProgressEvents([])
       setStreamingText('')
       setMessages((m) => [...m, { role: 'bot', content: evt.text }])
-      setUx(evt.ux || null)
+      setUx(nextUx)
+      uxRef.current = nextUx
+      lastBotMessageRef.current = evt.text
+      if (voicePrefs.outputEnabled && voicePrefs.autoPlay && outputAvailable) {
+        void requestVoiceGuide({
+          message: evt.text,
+          nextUx,
+          stage: nextUx?.stage || null,
+        })
+      } else {
+        setVoiceStatus('')
+      }
     } else if (evt.type === 'error') {
       setProgressEvents([])
       setStreamingText('')
@@ -126,20 +285,22 @@ export default function Chat({ onOpenAdmin }) {
         { role: 'bot', content: `Sorry, something went wrong: ${evt.text}` },
       ])
     }
-  }
+  }, [outputAvailable, requestVoiceGuide, voicePrefs.autoPlay, voicePrefs.outputEnabled])
 
-  // ── Text send ─────────────────────────────────────────────────────
-  const send = async (text) => {
+  const send = useCallback(async (text) => {
     const msg = (text || '').trim()
     if (!msg || loading) return
     setStarted(true)
     setInput('')
     setUx(null)
+    uxRef.current = null
     setMultiSelection([])
     setMessages((m) => [...m, { role: 'user', content: msg }])
     setProgressEvents([])
     setStreamingText('')
     setLoading(true)
+    if (voicePrefs.interruptible) stopSpeaking()
+    setVoiceStatus('')
 
     if (textareaRef.current) textareaRef.current.style.height = '44px'
 
@@ -150,9 +311,8 @@ export default function Chat({ onOpenAdmin }) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [handleEvent, loading, sessionId, stopSpeaking, voicePrefs.interruptible])
 
-  // ── File upload ───────────────────────────────────────────────────
   const triggerFilePicker = () => {
     if (loading) return
     fileInputRef.current?.click()
@@ -160,8 +320,9 @@ export default function Chat({ onOpenAdmin }) {
 
   const handleFileChange = async (e) => {
     const files = Array.from(e.target.files || [])
-    e.target.value = '' // allow re-upload of same filename later
+    e.target.value = ''
     if (!files.length) return
+    if (voicePrefs.interruptible) stopSpeaking()
 
     for (const file of files) {
       if (file.size > 10 * 1024 * 1024) {
@@ -174,11 +335,13 @@ export default function Chat({ onOpenAdmin }) {
 
       setStarted(true)
       setUx(null)
+      uxRef.current = null
       setMultiSelection([])
       setMessages((m) => [...m, { role: 'attachment', content: file.name }])
       setProgressEvents([])
       setStreamingText('')
       setLoading(true)
+      setVoiceStatus('')
 
       try {
         await uploadDocument({ file, sessionId: sessionIdRef.current, onEvent: handleEvent })
@@ -194,15 +357,22 @@ export default function Chat({ onOpenAdmin }) {
   }
 
   const handleReset = async () => {
+    if (voicePrefs.interruptible) stopSpeaking()
+    if (recognitionRef.current) recognitionRef.current.abort()
     await resetSession(sessionId)
     setMessages([])
     setSessionId(null)
+    sessionIdRef.current = null
     setStarted(false)
     setInput('')
     setUx(null)
+    uxRef.current = null
+    lastBotMessageRef.current = ''
     setProgressEvents([])
     setStreamingText('')
     setMultiSelection([])
+    setVoiceStatus('')
+    setListening(false)
   }
 
   const handleChoiceClick = (opt) => send(opt.label)
@@ -236,14 +406,110 @@ export default function Chat({ onOpenAdmin }) {
     e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'
   }
 
-  // A suggestion labelled like an upload prompt should open the file
-  // picker instead of sending the literal text.
   const isUploadSuggestion = (label) =>
     typeof label === 'string' && /upload|rc card|policy.*pdf|document/i.test(label)
 
   const handleSuggestion = (label) => {
     if (isUploadSuggestion(label)) triggerFilePicker()
     else send(label)
+  }
+
+  const processVoiceTranscript = useCallback(async (transcript) => {
+    setVoiceStatus(`Heard: ${transcript}`)
+    try {
+      const result = await classifyVoiceIntent({
+        transcript,
+        message: lastBotMessageRef.current,
+        ux: uxRef.current,
+        stage: uxRef.current?.stage || null,
+      })
+
+      if (result.intent === 'clarification') {
+        await requestVoiceGuide({
+          message: lastBotMessageRef.current,
+          nextUx: uxRef.current,
+          stage: uxRef.current?.stage || null,
+          query: transcript,
+          forcePlay: true,
+        })
+        return
+      }
+
+      if (result.intent === 'ambiguous') {
+        const followUp = result.follow_up || 'Do you want me to explain this screen or send that as your reply?'
+        setVoiceStatus(followUp)
+        if (voicePrefs.outputEnabled && outputAvailable) speakText(followUp)
+        return
+      }
+
+      setVoiceStatus(result.intent === 'detailed_question' ? 'Sending your question to chat...' : 'Using that as your reply...')
+      await send(transcript)
+    } catch (err) {
+      setVoiceStatus(`Voice input failed: ${err.message}`)
+    }
+  }, [outputAvailable, requestVoiceGuide, send, speakText, voicePrefs.outputEnabled])
+
+  const toggleListening = () => {
+    if (!inputAvailable) return
+    if (!speechSupported || typeof window === 'undefined') {
+      setVoiceStatus('Speech input is not supported in this browser.')
+      return
+    }
+    if (loading) return
+
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!Recognition) {
+      setVoiceStatus('Speech recognition is not supported in this browser.')
+      return
+    }
+
+    if (listening && recognitionRef.current) {
+      recognitionRef.current.stop()
+      return
+    }
+
+    const recognition = new Recognition()
+    recognitionRef.current = recognition
+    recognition.lang = getSpeechLang(voicePrefs.language)
+    recognition.interimResults = true
+    recognition.continuous = false
+    let finalTranscript = ''
+
+    recognition.onstart = () => {
+      setListening(true)
+      setVoiceStatus('Listening...')
+      if (voicePrefs.interruptible) stopSpeaking()
+    }
+
+    recognition.onresult = (event) => {
+      let interim = ''
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const transcript = event.results[i][0]?.transcript || ''
+        if (event.results[i].isFinal) finalTranscript += `${transcript} `
+        else interim += transcript
+      }
+      const preview = `${finalTranscript} ${interim}`.trim()
+      setVoiceStatus(preview || 'Listening...')
+    }
+
+    recognition.onerror = (event) => {
+      if (event.error !== 'no-speech') {
+        setVoiceStatus(`Voice input error: ${event.error}`)
+      }
+    }
+
+    recognition.onend = () => {
+      recognitionRef.current = null
+      setListening(false)
+      const spoken = finalTranscript.trim()
+      if (spoken) {
+        void processVoiceTranscript(spoken)
+      } else if (!loading) {
+        setVoiceStatus('')
+      }
+    }
+
+    recognition.start()
   }
 
   const renderInteractive = () => {
@@ -329,6 +595,38 @@ export default function Chat({ onOpenAdmin }) {
           <h1>Insurance Advisor</h1>
         </div>
         <div className="header-actions">
+          {outputAvailable && (
+            <button
+              className={`header-btn voice-toggle${voicePrefs.outputEnabled ? ' active' : ''}`}
+              onClick={() => {
+                if (!outputAvailable) return
+                setVoicePrefs((state) => ({ ...state, outputEnabled: !state.outputEnabled }))
+                if (voicePrefs.outputEnabled) stopSpeaking()
+              }}
+              title="Toggle voice output"
+            >
+              {voicePrefs.outputEnabled ? '🔊' : '🔈'}
+            </button>
+          )}
+          {(outputAvailable || inputAvailable) && (
+            <select
+              className="voice-select"
+              value={voicePrefs.language}
+              onChange={(e) => setVoicePrefs((state) => ({ ...state, language: e.target.value }))}
+            >
+              <option value="english">English</option>
+              <option value="hindi">Hindi</option>
+            </select>
+          )}
+          {inputAvailable && (
+            <button
+              className={`header-btn voice-toggle${listening ? ' listening' : ''}`}
+              onClick={toggleListening}
+              title="Talk to the assistant"
+            >
+              {listening ? '🎙️' : '🎤'}
+            </button>
+          )}
           {started && (
             <button className="header-btn" onClick={handleReset}>New chat</button>
           )}
@@ -340,6 +638,13 @@ export default function Chat({ onOpenAdmin }) {
         <span>🎉</span>
         <span><strong>Season Sale:</strong> Up to 20% off on select plans</span>
       </div>
+
+      {voiceStatus && (
+        <div className="voice-status">
+          <span>{listening ? '🎙️' : '🔊'}</span>
+          <span>{voiceStatus}</span>
+        </div>
+      )}
 
       {!started ? (
         <div className="welcome">
@@ -381,6 +686,17 @@ export default function Chat({ onOpenAdmin }) {
           >
             📎
           </button>
+          {inputAvailable && (
+            <button
+              className={`attach-btn mic-btn${listening ? ' active' : ''}`}
+              onClick={toggleListening}
+              disabled={loading}
+              aria-label="Speak"
+              title="Speak"
+            >
+              {listening ? '🎙️' : '🎤'}
+            </button>
+          )}
           <div className="input-wrapper">
             <textarea
               ref={textareaRef}

@@ -1,4 +1,4 @@
-// Centralized API client. Handles streaming chat, session, and admin.
+// Centralized API client. Handles streaming chat, voice helpers, session, and admin.
 
 const API_BASE = '/api'
 
@@ -41,10 +41,6 @@ async function consumeSSE(response, onEvent) {
   }
 }
 
-/**
- * Stream a chat turn via SSE. Calls `onEvent({type, ...})` for each event.
- * Returns a Promise that resolves when the stream ends (after 'final' or 'error').
- */
 export async function streamChat({ message, sessionId, onEvent, signal }) {
   const res = await fetch(`${API_BASE}/chat/stream`, {
     method: 'POST',
@@ -55,10 +51,6 @@ export async function streamChat({ message, sessionId, onEvent, signal }) {
   await consumeSSE(res, onEvent)
 }
 
-/**
- * Upload an RC card or policy document; backend runs vision extraction
- * then streams the agent's next turn via the same SSE contract.
- */
 export async function uploadDocument({ file, sessionId, docHint, onEvent, signal }) {
   const fd = new FormData()
   fd.append('file', file)
@@ -70,6 +62,38 @@ export async function uploadDocument({ file, sessionId, docHint, onEvent, signal
     signal,
   })
   await consumeSSE(res, onEvent)
+}
+
+export async function getPublicRuntimeConfig() {
+  const res = await fetch(`${API_BASE}/runtime/public`)
+  if (!res.ok) throw new Error(`Runtime config failed (${res.status})`)
+  return res.json()
+}
+
+export async function getVoiceGuide(payload) {
+  const res = await fetch(`${API_BASE}/voice/guide`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `Voice guide failed (${res.status})`)
+  }
+  return res.json()
+}
+
+export async function classifyVoiceIntent(payload) {
+  const res = await fetch(`${API_BASE}/voice/intent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `Voice intent failed (${res.status})`)
+  }
+  return res.json()
 }
 
 // ── Admin ────────────────────────────────────────────────────────────────
@@ -124,6 +148,26 @@ export async function toggleFeature(token, feature, enabled) {
     body: JSON.stringify({ feature, enabled }),
   })
   if (!res.ok) throw new Error(`Toggle failed (${res.status})`)
+  return res.json()
+}
+
+export async function updateVoiceSettings(token, patch) {
+  const res = await fetch(`${API_BASE}/admin/voice`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...adminHeaders(token) },
+    body: JSON.stringify(patch),
+  })
+  if (!res.ok) throw new Error(`Voice settings failed (${res.status})`)
+  return res.json()
+}
+
+export async function updateModelSettings(token, patch) {
+  const res = await fetch(`${API_BASE}/admin/models`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...adminHeaders(token) },
+    body: JSON.stringify(patch),
+  })
+  if (!res.ok) throw new Error(`Model settings failed (${res.status})`)
   return res.json()
 }
 

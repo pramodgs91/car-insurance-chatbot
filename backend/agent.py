@@ -6,48 +6,31 @@ Design:
 - RAG is consulted ONLY on explanation/objection/compare queries.
 - Response style is injected from runtime config.
 - Progress events are streamed while tools run (perceived latency).
-- Agent returns both the response AND a structured UX payload
-  (suggestions + input controls) for the frontend.
+- Provider/model routing is runtime-configurable and shared with voice/QC.
 """
 from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
-from pathlib import Path
 from typing import AsyncIterator
 
-from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent / ".env", override=True)
-
-from anthropic import AsyncAnthropic
-
 from tools import build_registry
-from tools.fields import JOURNEY
 from rag import VectorStore
-from admin import RuntimeConfig, STYLE_PRESETS
+from admin import RuntimeConfig
 
-
-# Default to Haiku 4.5 — 2-3× faster TTFT than Sonnet; plenty smart for
-# a structured journey. Override with CLAUDE_MODEL env var if needed.
-MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
-client = AsyncAnthropic(max_retries=3)
-
-
-# ── System prompt builder ────────────────────────────────────────────────────
 
 CORE_PROMPT = """You are an expert, warm, and slightly sales-oriented car insurance advisor for an Indian insurance aggregator.
 
 ## Core rules (NEVER violate)
-1. **Always call tools for factual data.** Never guess car details, premiums, IDV, add-on prices, or required fields. If a lookup fails, say so — do NOT make up numbers.
-2. **Progressive input collection.** Ask ONE primary question per turn. Accept multiple inputs only if the user volunteers them. Skip questions for data already known.
-3. **Stay in the flow.** The purchase journey has stages: registration_lookup → car_confirmation → policy_history → plan_selection → addons → previous_policy_details → nominee_details → review. Call `get_required_fields` whenever you need to know what to ask next.
-4. **Guide, don't overwhelm.** Summarize, recommend, then ask. Don't dump 10 options at once.
-5. **Be honest about mandatory items.** Compulsory Personal Accident cover is legally required (IRDAI rule). Don't pretend it's optional.
-6. **Upload-first onboarding.** In the VERY FIRST reply of a session, invite the user to upload their RC card AND/OR previous policy, or to type their registration number — whichever is faster. Add a suggestion chip labeled "📎 Upload RC or policy" so the frontend renders a file picker. The user can upload one document or both; each upload is processed separately and fields are merged.
-7. **Trust uploaded extractions.** If a user message is wrapped in square brackets and starts with "[I uploaded" — the fields inside are authoritative. Do NOT call `get_car_details` for the same registration; acknowledge the upload, confirm the key details in one sentence, and advance to the next missing field. Never re-ask for something already extracted.
-8. **Re-prompt for documents after quote selection.** Once the user has selected a quote/plan (moving past plan_selection into addons or later stages), check the conversation history. If you see NO "[I uploaded…]" messages in this session, include "📎 Upload RC card or previous policy" as one of the `suggestions` in the next 1–2 replies. Remind the user that uploading these docs lets you auto-fill nominee details, previous insurer name, and policy number — significantly speeding up the checkout.
+1. Always call tools for factual data. Never guess car details, premiums, IDV, add-on prices, or required fields. If a lookup fails, say so — do NOT make up numbers.
+2. Progressive input collection. Ask ONE primary question per turn. Accept multiple inputs only if the user volunteers them. Skip questions for data already known.
+3. Stay in the flow. The purchase journey has stages: registration_lookup → car_confirmation → policy_history → plan_selection → addons → previous_policy_details → nominee_details → review. Call `get_required_fields` whenever you need to know what to ask next.
+4. Guide, don't overwhelm. Summarize, recommend, then ask. Don't dump 10 options at once.
+5. Be honest about mandatory items. Compulsory Personal Accident cover is legally required (IRDAI rule). Don't pretend it's optional.
+6. Upload-first onboarding. In the VERY FIRST reply of a session, invite the user to upload their RC card AND/OR previous policy, or to type their registration number — whichever is faster. Add a suggestion chip labeled "📎 Upload RC or policy" so the frontend renders a file picker. The user can upload one document or both; each upload is processed separately and fields are merged.
+7. Trust uploaded extractions. If a user message is wrapped in square brackets and starts with "[I uploaded" — the fields inside are authoritative. Do NOT call `get_car_details` for the same registration; acknowledge the upload, confirm the key details in one sentence, and advance to the next missing field. Never re-ask for something already extracted.
+8. Re-prompt for documents after quote selection. Once the user has selected a quote/plan (moving past plan_selection into addons or later stages), check the conversation history. If you see NO "[I uploaded…]" messages in this session, include "📎 Upload RC card or previous policy" as one of the `suggestions` in the next 1–2 replies. Remind the user that uploading these docs lets you auto-fill nominee details, previous insurer name, and policy number — significantly speeding up the checkout.
 
 ## Sales craft (apply tastefully — never pushy)
 - Frame price in daily terms ("just ₹X/day").
@@ -104,70 +87,27 @@ The following passages come from our product knowledge base. Use them to ground 
 """
 
 
-def build_system_blocks(config: RuntimeConfig, rag_passages: list[dict] | None) -> list[dict]:
-    """
-    Return system as a list of content blocks. The static prefix
-    (core + style + custom instructions) is marked with cache_control
-    so Anthropic caches it across turns — saves input-token cost AND
-    shaves 300–800ms of input processing on cache hits.
+QC_SYSTEM = """You are a quality checker for a car-insurance advisor chatbot.
 
-    RAG passages live in a separate (uncached) trailing block because
-    they change per turn.
-    """
-    snapshot = config.snapshot()
-    preset = snapshot["style_preset"]
+Review the assistant reply and check:
+- factual accuracy
+- progressive flow (one question at a time)
+- tone
+- whether a <ux> block exists
 
-    static_parts = [CORE_PROMPT, STYLE_RULES.format(
-        style_name=snapshot["style"],
-        tone=preset["tone"],
-        verbosity=preset["verbosity"],
-        persuasion=preset["persuasion"],
-    )]
-
-    enabled = [b for b in snapshot["custom_instructions"] if b["enabled"]]
-    if enabled:
-        static_parts.append("\n## Custom instructions\n" + "\n\n".join(
-            f"### {b['title']}\n{b['content']}" for b in enabled
-        ))
-
-    blocks: list[dict] = [{
-        "type": "text",
-        "text": "\n".join(static_parts),
-        "cache_control": {"type": "ephemeral"},
-    }]
-
-    if rag_passages:
-        rendered = "\n\n".join(
-            f"[{i+1}] From \"{p['doc_name']}\": {p['text']}"
-            for i, p in enumerate(rag_passages)
-        )
-        blocks.append({
-            "type": "text",
-            "text": RAG_PREAMBLE.format(passages=rendered),
-        })
-
-    return blocks
+If it looks good, reply exactly APPROVED.
+Otherwise, reply with one short sentence describing the main issue to fix.
+"""
 
 
-# ── UX block parsing ─────────────────────────────────────────────────────────
+REVISION_SYSTEM = """You are revising a chatbot reply.
+
+Return only the corrected reply. Keep the <ux> block at the end.
+Do not mention that you revised anything.
+"""
+
 
 _UX_RE = re.compile(r"<ux>\s*(\{.*?\})\s*</ux>", re.DOTALL)
-
-
-def extract_ux(text: str) -> tuple[str, dict | None]:
-    """Split the model's reply into (prose, ux_dict). Tolerates malformed JSON."""
-    match = _UX_RE.search(text)
-    if not match:
-        return text.strip(), None
-    prose = (text[:match.start()] + text[match.end():]).strip()
-    try:
-        ux = json.loads(match.group(1))
-    except json.JSONDecodeError:
-        return prose, None
-    return prose, ux
-
-
-# ── RAG trigger heuristic ────────────────────────────────────────────────────
 
 _RAG_KEYWORDS = [
     "what is", "what's", "what are", "how does", "how do", "explain",
@@ -179,66 +119,108 @@ _RAG_KEYWORDS = [
 ]
 
 
+def build_system_blocks(config: RuntimeConfig, rag_passages: list[dict] | None) -> list[dict]:
+    snapshot = config.snapshot()
+    preset = snapshot["style_preset"]
+
+    static_parts = [
+        CORE_PROMPT,
+        STYLE_RULES.format(
+            style_name=snapshot["style"],
+            tone=preset["tone"],
+            verbosity=preset["verbosity"],
+            persuasion=preset["persuasion"],
+        ),
+    ]
+
+    enabled = [block for block in snapshot["custom_instructions"] if block["enabled"]]
+    if enabled:
+        static_parts.append(
+            "\n## Custom instructions\n"
+            + "\n\n".join(f"### {block['title']}\n{block['content']}" for block in enabled)
+        )
+
+    blocks: list[dict] = [
+        {
+            "type": "text",
+            "text": "\n".join(static_parts),
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+    if rag_passages:
+        rendered = "\n\n".join(
+            f"[{i + 1}] From \"{p['doc_name']}\": {p['text']}"
+            for i, p in enumerate(rag_passages)
+        )
+        blocks.append({"type": "text", "text": RAG_PREAMBLE.format(passages=rendered)})
+
+    return blocks
+
+
+def extract_ux(text: str) -> tuple[str, dict | None]:
+    match = _UX_RE.search(text)
+    if not match:
+        return text.strip(), None
+    prose = (text[: match.start()] + text[match.end() :]).strip()
+    try:
+        ux = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return prose, None
+    return prose, ux
+
+
 def should_retrieve(query: str) -> bool:
     q = query.lower()
-    return any(kw in q for kw in _RAG_KEYWORDS) or q.endswith("?")
+    return any(keyword in q for keyword in _RAG_KEYWORDS) or q.endswith("?")
 
-
-# ── Agent ────────────────────────────────────────────────────────────────────
 
 class Agent:
-    def __init__(self, vector_store: VectorStore, config: RuntimeConfig):
+    def __init__(self, vector_store: VectorStore, config: RuntimeConfig, model_router):
         self.tools = build_registry()
         self.vector_store = vector_store
         self.config = config
+        self.model_router = model_router
 
     async def _maybe_retrieve(self, query: str) -> list[dict]:
         cfg = self.config.snapshot()
-        if not cfg["rag_enabled"]:
-            return []
-        if not self.vector_store.enabled:
-            return []
-        if not should_retrieve(query):
+        if not cfg["rag_enabled"] or not self.vector_store.enabled or not should_retrieve(query):
             return []
         return self.vector_store.search(query, top_k=3)
 
     async def _quality_check(self, prose: str) -> str | None:
         cfg = self.config.snapshot()
-        if not cfg["evaluation_loop_enabled"]:
+        if not cfg["evaluation_loop_enabled"] or len(prose) < 80:
             return None
-        if len(prose) < 80:
-            return None
-        check = await client.messages.create(
-            model=MODEL,
+        out = await self.model_router.complete_text(
+            task="quality_checker",
+            system=QC_SYSTEM,
+            messages=[{"role": "user", "content": prose[:1800]}],
             max_tokens=120,
-            messages=[{
-                "role": "user",
-                "content": (
-                    "You're a quality checker for a car-insurance advisor chatbot. "
-                    "Review this reply and check: factual accuracy, progressive flow "
-                    "(one question at a time), tone, and whether a <ux> block "
-                    "exists. If it looks good, reply exactly APPROVED. Otherwise, "
-                    "write one short sentence describing what to fix.\n\n"
-                    f"Reply:\n{prose[:1500]}"
-                ),
-            }],
         )
-        out = check.content[0].text.strip()
         return None if out.upper().startswith("APPROVED") else out
 
-    async def stream(
-        self, user_message: str, history: list, session_data: dict
-    ) -> AsyncIterator[dict]:
-        """
-        Event types:
-          progress  — transient status text (pre-flight, retrieval)
-          token     — incremental text chunk for the live bot bubble
-          tool_start / tool_end — tool-call lifecycle (shown as pills)
-          final     — end of turn with cleaned prose + parsed <ux>
-          error     — fatal model/network error
-        """
-        cfg = self.config.snapshot()
+    async def _revise_reply(self, reply: str, issue: str) -> str:
+        prompt = (
+            f"Original reply:\n{reply}\n\n"
+            f"Issue to fix:\n{issue}\n\n"
+            "Return the improved reply only."
+        )
+        revised = await self.model_router.complete_text(
+            task="quality_checker",
+            system=REVISION_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=450,
+        )
+        return revised.strip() or reply
 
+    async def stream(
+        self,
+        user_message: str,
+        history: list,
+        session_data: dict,
+    ) -> AsyncIterator[dict]:
+        cfg = self.config.snapshot()
         if cfg["latency_optimizations_enabled"]:
             yield {"type": "progress", "text": "Got it — let me check that for you..."}
 
@@ -257,144 +239,90 @@ class Agent:
 
         for _ in range(6):
             text_accum = ""
-            ux_started = False  # once we see "<ux>" we stop forwarding tokens
-            final_message = None
+            ux_started = False
+            outcome = {"kind": "message", "tool_calls": []}
 
             try:
-                async with client.messages.stream(
-                    model=MODEL,
-                    max_tokens=2048,
-                    system=system_blocks,
-                    tools=tool_schemas,
-                    messages=history,
-                ) as stream:
-                    async for event in stream:
-                        etype = getattr(event, "type", None)
-                        if etype == "content_block_delta":
-                            delta = getattr(event, "delta", None)
-                            chunk = getattr(delta, "text", None) if delta else None
-                            if not chunk:
-                                continue
-                            text_accum += chunk
-                            if ux_started:
-                                continue
-                            # If the model just started emitting "<ux>"
-                            # mid-chunk, split and forward only the pre-ux part.
-                            idx = text_accum.find("<ux>")
-                            if idx != -1:
-                                # The chunk that revealed "<ux>" may contain
-                                # prose bytes before it — figure out how many
-                                # of THIS chunk belong pre-ux.
-                                pre_in_accum = text_accum[:idx]
-                                already_sent_len = len(text_accum) - len(chunk)
-                                if len(pre_in_accum) > already_sent_len:
-                                    yield {
-                                        "type": "token",
-                                        "text": pre_in_accum[already_sent_len:],
-                                    }
-                                ux_started = True
-                            else:
-                                yield {"type": "token", "text": chunk}
-                    final_message = await stream.get_final_message()
+                async for event in self.model_router.stream_chat(system_blocks, history, tool_schemas):
+                    if event["type"] == "text":
+                        chunk = event.get("text") or ""
+                        if not chunk:
+                            continue
+                        text_accum += chunk
+                        if ux_started:
+                            continue
+                        idx = text_accum.find("<ux>")
+                        if idx != -1:
+                            pre_in_accum = text_accum[:idx]
+                            already_sent_len = len(text_accum) - len(chunk)
+                            if len(pre_in_accum) > already_sent_len:
+                                yield {"type": "token", "text": pre_in_accum[already_sent_len:]}
+                            ux_started = True
+                        else:
+                            yield {"type": "token", "text": chunk}
+                    elif event["type"] == "tool_calls":
+                        outcome = {"kind": "tool_calls", "tool_calls": event.get("tool_calls", [])}
+                    elif event["type"] == "message":
+                        outcome = {"kind": "message", "tool_calls": []}
             except Exception as exc:
                 yield {"type": "error", "text": f"Model error: {exc}"}
                 return
 
-            if final_message is None:
+            if outcome["kind"] == "tool_calls":
+                if text_accum:
+                    yield {"type": "token_reset"}
+                history.append(
+                    {
+                        "role": "assistant",
+                        "content": text_accum,
+                        "tool_calls": outcome["tool_calls"],
+                    }
+                )
+
+                for tool_call in outcome["tool_calls"]:
+                    yield {
+                        "type": "tool_start",
+                        "tool": tool_call["name"],
+                        "text": _progress_msg_for_tool(tool_call["name"], tool_call["input"]),
+                    }
+
+                async def run_one(tool_call: dict) -> tuple[dict, dict]:
+                    result = await self.tools.execute(tool_call["name"], tool_call["input"])
+                    return tool_call, result
+
+                results = await asyncio.gather(*(run_one(call) for call in outcome["tool_calls"]))
+                for tool_call, result in results:
+                    ok = "error" not in result
+                    yield {"type": "tool_end", "tool": tool_call["name"], "ok": ok}
+
+                    if tool_call["name"] == "get_car_details" and ok:
+                        session_data["car_info"] = result
+                    elif tool_call["name"] == "get_insurance_quotes" and ok:
+                        session_data["quotes"] = result.get("quotes", [])
+                    elif tool_call["name"] == "get_addon_prices" and ok:
+                        session_data["addons"] = result.get("addons", [])
+
+                    history.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "name": tool_call["name"],
+                            "content": json.dumps(result),
+                        }
+                    )
+                continue
+
+            if not text_accum.strip():
                 yield {"type": "error", "text": "Empty model response."}
                 return
 
-            if final_message.stop_reason == "tool_use":
-                # Discard any interim text the user saw this turn — progress
-                # pills take over for tool execution.
-                if text_accum:
-                    yield {"type": "token_reset"}
-
-                history.append({"role": "assistant", "content": final_message.content})
-
-                tool_blocks = [b for b in final_message.content if b.type == "tool_use"]
-                for tb in tool_blocks:
-                    yield {
-                        "type": "tool_start",
-                        "tool": tb.name,
-                        "text": _progress_msg_for_tool(tb.name, tb.input),
-                    }
-
-                async def run_one(tb):
-                    return tb.id, tb.name, await self.tools.execute(tb.name, tb.input)
-
-                results = await asyncio.gather(*(run_one(tb) for tb in tool_blocks))
-
-                tool_results = []
-                for tb_id, tb_name, result in results:
-                    ok = "error" not in result
-                    yield {"type": "tool_end", "tool": tb_name, "ok": ok}
-
-                    if tb_name == "get_car_details" and ok:
-                        session_data["car_info"] = result
-                    elif tb_name == "get_insurance_quotes" and ok:
-                        session_data["quotes"] = result.get("quotes", [])
-                    elif tb_name == "get_addon_prices" and ok:
-                        session_data["addons"] = result.get("addons", [])
-
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tb_id,
-                        "content": json.dumps(result),
-                    })
-
-                history.append({"role": "user", "content": tool_results})
-                continue
-
-            # end_turn — final reply. Tokens have already streamed.
-            # Optional QC (off by default for speed).
             correction = await self._quality_check(text_accum)
             if correction:
-                history.append({"role": "assistant", "content": text_accum})
-                history.append({
-                    "role": "user",
-                    "content": [{
-                        "type": "text",
-                        "text": f"[INTERNAL QC — not from user] Please revise your previous reply. Issue: {correction}. Reply with the corrected response only — keep the <ux> block at the end. Do not mention this revision.",
-                    }],
-                })
-                # Reset the live bubble — the revised text will stream fresh.
                 yield {"type": "token_reset"}
-                revised_accum = ""
-                revised_ux_started = False
                 try:
-                    async with client.messages.stream(
-                        model=MODEL,
-                        max_tokens=2048,
-                        system=system_blocks,
-                        tools=tool_schemas,
-                        messages=history,
-                    ) as stream:
-                        async for event in stream:
-                            if getattr(event, "type", None) != "content_block_delta":
-                                continue
-                            delta = getattr(event, "delta", None)
-                            chunk = getattr(delta, "text", None) if delta else None
-                            if not chunk:
-                                continue
-                            revised_accum += chunk
-                            if revised_ux_started:
-                                continue
-                            idx = revised_accum.find("<ux>")
-                            if idx != -1:
-                                pre = revised_accum[:idx]
-                                sent = len(revised_accum) - len(chunk)
-                                if len(pre) > sent:
-                                    yield {"type": "token", "text": pre[sent:]}
-                                revised_ux_started = True
-                            else:
-                                yield {"type": "token", "text": chunk}
+                    text_accum = await self._revise_reply(text_accum, correction)
                 except Exception:
-                    revised_accum = ""
-                if revised_accum:
-                    history.pop()  # remove QC instruction
-                    history.pop()  # remove original (pre-revision) reply
-                    text_accum = revised_accum
+                    pass
 
             history.append({"role": "assistant", "content": text_accum})
             prose, ux = extract_ux(text_accum)
@@ -403,8 +331,6 @@ class Agent:
 
         yield {"type": "error", "text": "Max tool iterations reached."}
 
-
-# ── Progress message helpers ─────────────────────────────────────────────────
 
 def _progress_msg_for_tool(name: str, input_data: dict) -> str:
     if name == "get_car_details":

@@ -1,5 +1,5 @@
 """
-FastAPI application — chat (streaming via SSE) + admin APIs.
+FastAPI application — chat, voice, and admin APIs.
 """
 from __future__ import annotations
 
@@ -7,21 +7,22 @@ import json
 import os
 import uuid
 from pathlib import Path
+from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from agent import Agent
-from rag import VectorStore, ingest_bytes, seed_defaults
-from admin import RuntimeConfig, AdminSession, verify_password
+from admin import AdminSession, RuntimeConfig, verify_password
 from admin.auth import admin_configured
-from extraction import extract_from_upload, merge_into_session, format_for_agent
+from agent import Agent
+from extraction import extract_from_upload, format_for_agent, merge_into_session
+from llm import ModelRouter
+from rag import VectorStore, ingest_bytes, seed_defaults
+from voice import VoiceService
 
-
-# ── Paths ────────────────────────────────────────────────────────────────────
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).parent / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -31,19 +32,17 @@ UPLOADS_DIR = DATA_DIR / "uploads"
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ── Singletons ───────────────────────────────────────────────────────────────
-
 vector_store = VectorStore(KB_STORE_PATH)
 seed_defaults(vector_store)
 runtime_config = RuntimeConfig(CONFIG_STORE_PATH)
+model_router = ModelRouter(runtime_config)
+voice_service = VoiceService(runtime_config, model_router)
 admin_sessions = AdminSession()
-agent = Agent(vector_store, runtime_config)
+agent = Agent(vector_store, runtime_config, model_router)
 
 # In-memory chat sessions
-sessions: dict[str, dict] = {}
+sessions: dict[str, dict[str, Any]] = {}
 
-
-# ── App ──────────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="Car Insurance Chatbot API")
 
@@ -55,8 +54,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# ── Schemas ──────────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
     message: str
@@ -88,17 +85,56 @@ class InstructionUpdateRequest(BaseModel):
     enabled: bool | None = None
 
 
-# ── Chat (SSE streaming) ─────────────────────────────────────────────────────
+class VoiceSettingsRequest(BaseModel):
+    output_enabled: bool | None = None
+    input_enabled: bool | None = None
+    language: str | None = None
+    tone: str | None = None
+    detail_level: str | None = None
+    auto_play: bool | None = None
+    interruptible: bool | None = None
+    speed: str | None = None
+
+
+class ModelSettingsRequest(BaseModel):
+    model_family: str | None = None
+    task_models: dict[str, str] | None = None
+
+
+class VoiceGuideRequest(BaseModel):
+    message: str
+    ux: dict | None = None
+    stage: str | None = None
+    language: str | None = None
+    detail_level: str | None = None
+    tone: str | None = None
+    query: str | None = None
+
+
+class VoiceIntentRequest(BaseModel):
+    transcript: str
+    message: str | None = None
+    ux: dict | None = None
+    stage: str | None = None
+
+
+def _require_admin(token: str | None) -> None:
+    if not admin_sessions.validate(token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _session_for(session_id: str | None) -> tuple[str, dict[str, Any]]:
+    sid = session_id or str(uuid.uuid4())
+    if sid not in sessions:
+        sessions[sid] = {"history": [], "data": {}}
+    return sid, sessions[sid]
+
 
 @app.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest):
-    session_id = req.session_id or str(uuid.uuid4())
-    if session_id not in sessions:
-        sessions[session_id] = {"history": [], "data": {}}
-    session = sessions[session_id]
+    session_id, session = _session_for(req.session_id)
 
     async def generate():
-        # send session id upfront
         yield f"event: session\ndata: {json.dumps({'session_id': session_id})}\n\n"
         try:
             async for evt in agent.stream(req.message, session["history"], session["data"]):
@@ -112,12 +148,7 @@ async def chat_stream(req: ChatRequest):
 
 @app.post("/api/chat")
 async def chat_non_streaming(req: ChatRequest):
-    """Fallback non-streaming endpoint. Consumes the stream and returns final."""
-    session_id = req.session_id or str(uuid.uuid4())
-    if session_id not in sessions:
-        sessions[session_id] = {"history": [], "data": {}}
-    session = sessions[session_id]
-
+    session_id, session = _session_for(req.session_id)
     final = {"response": "", "ux": None}
     async for evt in agent.stream(req.message, session["history"], session["data"]):
         if evt["type"] == "final":
@@ -131,18 +162,9 @@ async def chat_non_streaming(req: ChatRequest):
 async def chat_upload_stream(
     file: UploadFile = File(...),
     session_id: str | None = Form(None),
-    doc_hint: str | None = Form(None),  # "rc_card" | "previous_policy" | None
+    doc_hint: str | None = Form(None),
 ):
-    """
-    Accept an RC card or previous policy document (PDF/image), run vision
-    extraction, merge the fields into the session, and stream the agent's
-    next turn back as SSE.
-    """
-    sid = session_id or str(uuid.uuid4())
-    if sid not in sessions:
-        sessions[sid] = {"history": [], "data": {}}
-    session = sessions[sid]
-
+    sid, session = _session_for(session_id)
     data = await file.read()
     if len(data) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
@@ -153,7 +175,13 @@ async def chat_upload_stream(
         yield f"event: session\ndata: {json.dumps({'session_id': sid})}\n\n"
         yield f"event: progress\ndata: {json.dumps({'type': 'progress', 'text': f'Reading {filename}...'})}\n\n"
         try:
-            extracted = await extract_from_upload(data, file.content_type, filename, doc_hint)
+            extracted = await extract_from_upload(
+                data,
+                file.content_type,
+                filename,
+                model_router,
+                doc_hint,
+            )
         except ValueError as exc:
             yield f"event: error\ndata: {json.dumps({'type': 'error', 'text': str(exc)})}\n\n"
             return
@@ -164,8 +192,7 @@ async def chat_upload_stream(
 
         applied = merge_into_session(session["data"], extracted)
         synthetic = format_for_agent(filename, extracted, applied)
-
-        summary_bits = [f"{k}: {v}" for k, v in applied.items()]
+        summary_bits = [f"{key}: {value}" for key, value in applied.items()]
         summary = ", ".join(summary_bits[:3]) if summary_bits else "no fields readable"
         yield f"event: progress\ndata: {json.dumps({'type': 'progress', 'text': f'Extracted — {summary}'})}\n\n"
 
@@ -191,11 +218,38 @@ async def health():
     return {"status": "healthy", "admin_configured": admin_configured()}
 
 
-# ── Admin auth ───────────────────────────────────────────────────────────────
+@app.get("/api/runtime/public")
+async def public_runtime():
+    return runtime_config.public_snapshot()
 
-def _require_admin(token: str | None) -> None:
-    if not admin_sessions.validate(token):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+
+@app.post("/api/voice/guide")
+async def voice_guide(req: VoiceGuideRequest):
+    try:
+        return await voice_service.guide(
+            message=req.message,
+            ux=req.ux,
+            stage=req.stage,
+            language=req.language,
+            detail_level=req.detail_level,
+            tone=req.tone,
+            query=req.query,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/voice/intent")
+async def voice_intent(req: VoiceIntentRequest):
+    try:
+        return await voice_service.classify(
+            transcript=req.transcript,
+            message=req.message,
+            ux=req.ux,
+            stage=req.stage,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/api/admin/login")
@@ -218,15 +272,10 @@ async def admin_logout(x_admin_token: str | None = Header(default=None)):
     return {"status": "ok"}
 
 
-# ── Admin config ─────────────────────────────────────────────────────────────
-
 @app.get("/api/admin/config")
 async def get_config(x_admin_token: str | None = Header(default=None)):
     _require_admin(x_admin_token)
-    return {
-        **runtime_config.snapshot(),
-        "kb_stats": vector_store.stats(),
-    }
+    return {**runtime_config.snapshot(), "kb_stats": vector_store.stats()}
 
 
 @app.post("/api/admin/style")
@@ -235,7 +284,7 @@ async def set_style(req: StyleRequest, x_admin_token: str | None = Header(defaul
     try:
         runtime_config.update_style(req.style)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return runtime_config.snapshot()
 
 
@@ -245,7 +294,30 @@ async def toggle_feature(req: FeatureToggleRequest, x_admin_token: str | None = 
     try:
         runtime_config.toggle_feature(req.feature, req.enabled)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return runtime_config.snapshot()
+
+
+@app.post("/api/admin/voice")
+async def update_voice(req: VoiceSettingsRequest, x_admin_token: str | None = Header(default=None)):
+    _require_admin(x_admin_token)
+    try:
+        runtime_config.update_voice(**req.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return runtime_config.snapshot()
+
+
+@app.post("/api/admin/models")
+async def update_models(req: ModelSettingsRequest, x_admin_token: str | None = Header(default=None)):
+    _require_admin(x_admin_token)
+    try:
+        if req.model_family is not None:
+            runtime_config.update_model_family(req.model_family)
+        if req.task_models is not None:
+            runtime_config.update_task_models(req.task_models)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return runtime_config.snapshot()
 
 
@@ -257,8 +329,11 @@ async def add_instruction(req: InstructionRequest, x_admin_token: str | None = H
 
 
 @app.patch("/api/admin/instructions/{block_id}")
-async def update_instruction(block_id: str, req: InstructionUpdateRequest,
-                              x_admin_token: str | None = Header(default=None)):
+async def update_instruction(
+    block_id: str,
+    req: InstructionUpdateRequest,
+    x_admin_token: str | None = Header(default=None),
+):
     _require_admin(x_admin_token)
     ok = runtime_config.update_instruction(block_id, req.title, req.content, req.enabled)
     if not ok:
@@ -275,8 +350,6 @@ async def delete_instruction(block_id: str, x_admin_token: str | None = Header(d
     return runtime_config.snapshot()
 
 
-# ── Admin knowledge base ─────────────────────────────────────────────────────
-
 @app.get("/api/admin/knowledge")
 async def list_knowledge(x_admin_token: str | None = Header(default=None)):
     _require_admin(x_admin_token)
@@ -290,27 +363,30 @@ async def upload_knowledge(
 ):
     _require_admin(x_admin_token)
     data = await file.read()
-    if len(data) > 10 * 1024 * 1024:  # 10 MB
+    if len(data) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
 
     try:
         chunks = ingest_bytes(file.filename, data)
     except (ValueError, RuntimeError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not chunks:
         raise HTTPException(status_code=400, detail="No extractable text in file")
 
     doc_id = uuid.uuid4().hex[:10]
     vector_store.add_chunks(doc_id=doc_id, doc_name=file.filename, chunks=chunks)
 
-    # persist raw upload too
     try:
         (UPLOADS_DIR / f"{doc_id}_{file.filename}").write_bytes(data)
     except Exception:
         pass
 
-    return {"doc_id": doc_id, "doc_name": file.filename, "chunks": len(chunks),
-            "stats": vector_store.stats()}
+    return {
+        "doc_id": doc_id,
+        "doc_name": file.filename,
+        "chunks": len(chunks),
+        "stats": vector_store.stats(),
+    }
 
 
 @app.delete("/api/admin/knowledge/{doc_id}")
@@ -327,8 +403,6 @@ async def test_search(q: str, x_admin_token: str | None = Header(default=None)):
     _require_admin(x_admin_token)
     return {"results": vector_store.search(q, top_k=5)}
 
-
-# ── Frontend ─────────────────────────────────────────────────────────────────
 
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 if frontend_dist.exists():

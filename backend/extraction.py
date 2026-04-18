@@ -1,28 +1,20 @@
 """
 Document extraction for RC cards and prior motor insurance policies.
 
-Uses Claude Vision (sonnet — best accuracy on Indian docs) with a forced
-tool call so the output is always a strict, typed JSON object.
+Uses the active model family via the provider router and returns structured
+fields that can be merged into the chat session.
 """
 from __future__ import annotations
 
-import base64
-import json
-import os
 from typing import Any
-
-from anthropic import AsyncAnthropic
-
-
-# Vision is more reliable on Sonnet for dense Indian docs. This call only
-# runs on file uploads, not per turn, so cost isn't a concern.
-EXTRACTION_MODEL = os.environ.get("EXTRACTION_MODEL", "claude-sonnet-4-20250514")
-
-_client = AsyncAnthropic(max_retries=2)
 
 
 SUPPORTED_IMAGE_TYPES = {
-    "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif",
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "image/gif",
 }
 SUPPORTED_DOC_TYPES = {"application/pdf"}
 
@@ -43,7 +35,6 @@ EXTRACTION_TOOL = {
                 "enum": ["rc_card", "previous_policy", "other"],
                 "description": "Which kind of document this is.",
             },
-            # RC / car fields
             "registration_number": {
                 "type": "string",
                 "description": "Vehicle registration without spaces, e.g. KA05NG2604.",
@@ -60,7 +51,6 @@ EXTRACTION_TOOL = {
             "chassis_number": {"type": "string"},
             "engine_number": {"type": "string"},
             "rto_code": {"type": "string", "description": "e.g. KA05."},
-            # Policy fields
             "previous_insurer": {"type": "string"},
             "previous_policy_number": {"type": "string"},
             "policy_type": {
@@ -74,7 +64,6 @@ EXTRACTION_TOOL = {
             "claims_made": {"type": "string", "enum": ["yes", "no", "unknown"]},
             "nominee_name": {"type": "string"},
             "nominee_relation": {"type": "string"},
-            # Meta
             "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
             "notes": {
                 "type": "string",
@@ -88,21 +77,19 @@ EXTRACTION_TOOL = {
 
 EXTRACTION_PROMPT = """You are extracting structured data from an Indian automobile document uploaded by a user seeking car insurance. The document is either:
 
-1. An **RC (Registration Certificate) card** — issued by the RTO, contains the vehicle's registration number, make, model, variant, year of registration, fuel type, owner name, chassis/engine numbers.
+1. An RC (Registration Certificate) card from the RTO.
+2. A motor insurance policy document from an Indian insurer.
+3. Something else.
 
-2. A **motor insurance policy document** — from an Indian insurer (ICICI Lombard, HDFC Ergo, Bajaj Allianz, Digit, Acko, Tata AIG, etc.). Contains policy number, insurer, policy type (comprehensive / third-party / own-damage), dates, IDV, NCB, claims history, nominee details.
+Read the document carefully and return the requested fields. Rules:
 
-3. Something else — mark doc_type="other".
-
-Read the document carefully and call the `record_extracted_fields` tool EXACTLY ONCE with everything you can see. Rules:
-
-- Registration number: strip all spaces, convert to uppercase (e.g. "KA 05 NG 2604" → "KA05NG2604").
+- Registration number: strip spaces and convert to uppercase.
 - Dates: normalize to DD/MM/YYYY.
-- IDV and premium: digits only (strip ₹, commas, "Rs.", decimals).
-- NCB: just the number (e.g. "25").
-- For RC cards, leave policy fields empty. For policy docs, leave chassis/engine empty if not present.
-- If you cannot read a field with reasonable confidence, DO NOT GUESS — leave it empty.
-- Set `confidence` based on how clearly the document was readable.
+- IDV and premium: digits only.
+- NCB: only the number.
+- Leave unreadable fields empty.
+- Do not guess.
+- Set confidence based on readability.
 """
 
 
@@ -110,7 +97,6 @@ def _media_type_from(filename: str, content_type: str | None) -> str | None:
     ct = (content_type or "").lower()
     if ct in SUPPORTED_IMAGE_TYPES or ct in SUPPORTED_DOC_TYPES:
         return ct
-    # Fallback: sniff by extension.
     name = (filename or "").lower()
     if name.endswith((".jpg", ".jpeg")):
         return "image/jpeg"
@@ -125,25 +111,11 @@ def _media_type_from(filename: str, content_type: str | None) -> str | None:
     return None
 
 
-def _build_content_block(file_bytes: bytes, media_type: str) -> dict:
-    b64 = base64.standard_b64encode(file_bytes).decode("ascii")
-    if media_type in SUPPORTED_IMAGE_TYPES:
-        return {
-            "type": "image",
-            "source": {"type": "base64", "media_type": media_type, "data": b64},
-        }
-    if media_type in SUPPORTED_DOC_TYPES:
-        return {
-            "type": "document",
-            "source": {"type": "base64", "media_type": media_type, "data": b64},
-        }
-    raise ValueError(f"Unsupported media type: {media_type}")
-
-
 async def extract_from_upload(
     file_bytes: bytes,
     content_type: str | None,
     filename: str,
+    model_router,
     doc_hint: str | None = None,
 ) -> dict[str, Any]:
     """
@@ -159,50 +131,22 @@ async def extract_from_upload(
 
     hint_text = ""
     if doc_hint:
-        hint_text = f"\nHint from user: this is a **{doc_hint}**."
-
-    content = [
-        _build_content_block(file_bytes, media_type),
-        {"type": "text", "text": EXTRACTION_PROMPT + hint_text},
-    ]
+        hint_text = f"\nHint from user: this is a {doc_hint}."
 
     try:
-        response = await _client.messages.create(
-            model=EXTRACTION_MODEL,
-            max_tokens=1024,
-            tools=[EXTRACTION_TOOL],
-            tool_choice={"type": "tool", "name": "record_extracted_fields"},
-            messages=[{"role": "user", "content": content}],
+        raw = await model_router.extract_document(
+            file_bytes=file_bytes,
+            media_type=media_type,
+            prompt=EXTRACTION_PROMPT + hint_text,
+            tool_schema=EXTRACTION_TOOL,
         )
     except Exception as exc:
         raise RuntimeError(f"Vision model call failed: {exc}") from exc
 
-    for block in response.content:
-        if block.type == "tool_use" and block.name == "record_extracted_fields":
-            # Drop empty strings so downstream code can treat missing as missing.
-            raw = block.input or {}
-            cleaned = {k: v for k, v in raw.items() if v not in ("", None)}
-            return cleaned
-
-    raise RuntimeError("Model did not return structured extraction.")
-
-
-# ── Session mapping ──────────────────────────────────────────────────────────
-
-# Map extraction keys → session_data keys used by tools/fields.py journey.
-_FIELD_TO_SESSION = {
-    "registration_number": "registration_number",
-    "usage_type": "usage_type",            # rarely on docs, but keep
-    "previous_policy_type": "previous_policy_type",
-    "policy_expired": "policy_expired",
-    "claim_made": "claim_made",
-    "ncb_percent": "ncb_percent",
-    "previous_insurer": "previous_insurer",
-    "previous_policy_number": "previous_policy_number",
-    "previous_policy_expiry": "previous_policy_expiry",
-    "nominee_name": "nominee_name",
-    "nominee_relation": "nominee_relation",
-}
+    cleaned = {key: value for key, value in (raw or {}).items() if value not in ("", None)}
+    if "registration_number" in cleaned and isinstance(cleaned["registration_number"], str):
+        cleaned["registration_number"] = cleaned["registration_number"].replace(" ", "").upper()
+    return cleaned
 
 
 def merge_into_session(session_data: dict, extracted: dict) -> dict:
@@ -249,76 +193,22 @@ def merge_into_session(session_data: dict, extracted: dict) -> dict:
         filled["nominee_relation"] = extracted["nominee_relation"]
         applied["nominee_relation"] = extracted["nominee_relation"]
 
-    # Car info (from RC) goes into the same slot the get_car_details tool
-    # populates — so the agent can skip the lookup call.
     car_fields = {
-        k: extracted[k]
-        for k in ("registration_number", "make", "model", "variant",
-                  "year", "fuel_type", "owner_name", "rto_code")
-        if k in extracted
+        key: extracted[key]
+        for key in ("registration_number", "make", "model", "variant", "year", "fuel_type", "owner_name", "rto_code")
+        if key in extracted
     }
     if car_fields:
-        existing = session_data.get("car_info") or {}
-        session_data["car_info"] = {**existing, **car_fields, "source": "user_upload"}
+        session_data["car_info"] = {**session_data.get("car_info", {}), **car_fields}
+        applied.update(car_fields)
 
     return applied
 
 
 def format_for_agent(filename: str, extracted: dict, applied: dict) -> str:
-    """Render a user-visible summary that doubles as the agent's next turn."""
     doc_type = extracted.get("doc_type", "document")
-    pretty = {
-        "rc_card": "RC card",
-        "previous_policy": "previous policy document",
-    }.get(doc_type, "document")
-
-    lines: list[str] = []
-
-    if doc_type == "rc_card":
-        for label, key in [
-            ("Registration", "registration_number"),
-            ("Make", "make"),
-            ("Model", "model"),
-            ("Variant", "variant"),
-            ("Year", "year"),
-            ("Fuel", "fuel_type"),
-            ("Owner", "owner_name"),
-        ]:
-            if extracted.get(key):
-                lines.append(f"- {label}: {extracted[key]}")
-    elif doc_type == "previous_policy":
-        for label, key in [
-            ("Registration", "registration_number"),
-            ("Previous insurer", "previous_insurer"),
-            ("Policy number", "previous_policy_number"),
-            ("Policy type", "policy_type"),
-            ("Start date", "policy_start_date"),
-            ("Expiry date", "policy_expiry_date"),
-            ("IDV", "idv"),
-            ("NCB", "ncb_percent"),
-            ("Claims made", "claims_made"),
-        ]:
-            if extracted.get(key):
-                lines.append(f"- {label}: {extracted[key]}")
-    else:
-        for k, v in extracted.items():
-            if k in ("doc_type", "confidence", "notes"):
-                continue
-            if v:
-                lines.append(f"- {k}: {v}")
-
-    body = (
-        f"[I uploaded my {pretty} — \"{filename}\". "
-        f"Extracted fields below are authoritative; use them directly and do NOT re-ask for these. "
-        f"Skip tools like get_car_details when registration_number is already known. "
-        f"Confirm briefly and proceed to the next missing field in the journey.]\n\n"
+    return (
+        f"[I uploaded {filename} ({doc_type}). "
+        f"Extracted fields: {applied}. "
+        "Please acknowledge the upload, trust these extracted fields, and continue the journey.]"
     )
-    if lines:
-        body += "\n".join(lines)
-    else:
-        body += "(No fields could be read confidently — please apologize and ask for the registration number in text.)"
-
-    note = extracted.get("notes")
-    if note:
-        body += f"\n\nNote: {note}"
-    return body
