@@ -32,6 +32,16 @@ class Tool(ABC):
             "input_schema": self.input_schema,
         }
 
+    def openai_schema(self) -> dict:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.input_schema,
+            },
+        }
+
 
 class ToolRegistry:
     """Holds all registered tools and dispatches tool-use calls."""
@@ -47,6 +57,9 @@ class ToolRegistry:
 
     def anthropic_schemas(self) -> list[dict]:
         return [t.anthropic_schema() for t in self._tools.values()]
+
+    def openai_schemas(self) -> list[dict]:
+        return [t.openai_schema() for t in self._tools.values()]
 
     async def execute(self, name: str, input_data: dict) -> dict:
         tool = self._tools.get(name)

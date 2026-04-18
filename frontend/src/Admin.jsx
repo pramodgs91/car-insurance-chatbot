@@ -3,12 +3,35 @@ import {
   adminLogin, adminLogout, getAdminConfig, setAdminStyle, toggleFeature,
   uploadKnowledge, deleteKnowledge, addInstruction, updateInstruction,
   deleteInstruction, listKnowledge, getHealth,
+  updateVoiceSettings, updateModelSettings,
 } from './api'
 
 const FEATURE_LABELS = {
   rag_enabled: { label: 'RAG knowledge retrieval', hint: 'Pulls from the knowledge base on explain/compare/objection queries' },
-  evaluation_loop_enabled: { label: 'Quality evaluation loop', hint: 'Runs a QC pass and auto-revises weak responses' },
+  evaluation_loop_enabled: { label: 'Quality evaluation loop', hint: 'Runs a QC pass and auto-revises weak responses (adds ~1-2s latency)' },
   latency_optimizations_enabled: { label: 'Latency optimizations', hint: 'Streaming progress messages and async tool calls' },
+}
+
+const VOICE_BOOL_ROWS = [
+  { key: 'output_enabled', label: 'Voice output', hint: 'Speak a summary of each bot response via TTS' },
+  { key: 'input_enabled', label: 'Voice input', hint: 'Let users speak instead of type; intent is auto-classified' },
+  { key: 'auto_play', label: 'Auto-play', hint: 'Speak immediately after each bot turn (requires output enabled)' },
+  { key: 'interruptible', label: 'Interruptible', hint: 'Stop current speech when new input starts' },
+]
+
+const VOICE_SELECT_ROWS = [
+  { key: 'language', label: 'Language', options: ['english', 'hindi'] },
+  { key: 'tone', label: 'Tone', options: ['friendly', 'professional', 'sales'] },
+  { key: 'detail_level', label: 'Detail level', options: ['quick', 'moderate', 'detailed'] },
+  { key: 'speed', label: 'Speed', options: ['slow', 'normal', 'fast'] },
+]
+
+const TASK_LABELS = {
+  chat_agent: 'Chat agent',
+  voice_summarizer: 'Voice summariser',
+  intent_classifier: 'Intent classifier',
+  quality_checker: 'Quality checker',
+  document_extraction: 'Document extraction',
 }
 
 export default function Admin({ onClose }) {
@@ -22,6 +45,7 @@ export default function Admin({ onClose }) {
   const [newInstruction, setNewInstruction] = useState({ title: '', content: '' })
   const [successMsg, setSuccessMsg] = useState('')
   const [adminAvailable, setAdminAvailable] = useState(true)
+  const [taskModelDraft, setTaskModelDraft] = useState({})
   const fileRef = useRef(null)
 
   useEffect(() => {
@@ -32,6 +56,10 @@ export default function Admin({ onClose }) {
     if (token) loadAll()
     // eslint-disable-next-line
   }, [token])
+
+  useEffect(() => {
+    if (config?.task_models) setTaskModelDraft({ ...config.task_models })
+  }, [config?.task_models])
 
   const flashSuccess = (msg) => {
     setSuccessMsg(msg)
@@ -45,7 +73,6 @@ export default function Admin({ onClose }) {
       setKbDocs(kb.docs)
       setKbStats(kb.stats)
     } catch (err) {
-      // token might be stale
       if (String(err.message).includes('401')) {
         setToken(null)
         sessionStorage.removeItem('admin_token')
@@ -91,6 +118,37 @@ export default function Admin({ onClose }) {
     try {
       const cfg = await toggleFeature(token, feature, enabled)
       setConfig(cfg)
+    } catch (err) { setError(err.message) }
+  }
+
+  const handleVoiceBool = async (key, value) => {
+    try {
+      const cfg = await updateVoiceSettings(token, { [key]: value })
+      setConfig(cfg)
+    } catch (err) { setError(err.message) }
+  }
+
+  const handleVoiceSelect = async (key, value) => {
+    try {
+      const cfg = await updateVoiceSettings(token, { [key]: value })
+      setConfig(cfg)
+      flashSuccess(`Voice ${key.replace('_', ' ')} set to "${value}"`)
+    } catch (err) { setError(err.message) }
+  }
+
+  const handleModelFamily = async (family) => {
+    try {
+      const cfg = await updateModelSettings(token, { model_family: family })
+      setConfig(cfg)
+      flashSuccess(`Model family switched to ${family} — applies to new sessions`)
+    } catch (err) { setError(err.message) }
+  }
+
+  const handleTaskModelsSave = async () => {
+    try {
+      const cfg = await updateModelSettings(token, { task_models: taskModelDraft })
+      setConfig(cfg)
+      flashSuccess('Task models saved')
     } catch (err) { setError(err.message) }
   }
 
@@ -210,6 +268,10 @@ export default function Admin({ onClose }) {
     )
   }
 
+  const voice = config.voice || {}
+  const taskModels = config.task_models || {}
+  const taskModelsDirty = JSON.stringify(taskModelDraft) !== JSON.stringify(taskModels)
+
   return (
     <div className="admin-overlay">
       <div className="admin-header">
@@ -244,7 +306,7 @@ export default function Admin({ onClose }) {
           </div>
         </div>
 
-        {/* Feature toggles */}
+        {/* Runtime features */}
         <div className="admin-section">
           <h3>Runtime Features</h3>
           {Object.keys(FEATURE_LABELS).map((feat) => (
@@ -260,6 +322,88 @@ export default function Admin({ onClose }) {
               />
             </div>
           ))}
+        </div>
+
+        {/* Voice settings */}
+        <div className="admin-section">
+          <h3>Voice</h3>
+          {VOICE_BOOL_ROWS.map(({ key, label, hint }) => (
+            <div key={key} className="toggle-row">
+              <div>
+                <div className="label">{label}</div>
+                <div className="hint">{hint}</div>
+              </div>
+              <button
+                className={`switch${voice[key] ? ' on' : ''}`}
+                onClick={() => handleVoiceBool(key, !voice[key])}
+                aria-label="toggle"
+              />
+            </div>
+          ))}
+          <div className="voice-selects">
+            {VOICE_SELECT_ROWS.map(({ key, label, options }) => (
+              <div key={key} className="voice-select-row">
+                <span className="voice-select-label">{label}</span>
+                <div className="voice-option-group">
+                  {options.map((opt) => (
+                    <button
+                      key={opt}
+                      className={`voice-option-btn${voice[key] === opt ? ' active' : ''}`}
+                      onClick={() => handleVoiceSelect(key, opt)}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Model family */}
+        <div className="admin-section">
+          <h3>Model Family</h3>
+          <div className="hint" style={{ marginBottom: 10, fontSize: 12, color: 'var(--gray-500)' }}>
+            Applies to new sessions. Existing sessions keep their current provider until reset.
+          </div>
+          <div className="voice-option-group" style={{ marginBottom: 16 }}>
+            {(config.available_model_families || ['claude', 'openai']).map((fam) => (
+              <button
+                key={fam}
+                className={`voice-option-btn${config.model_family === fam ? ' active' : ''}`}
+                onClick={() => handleModelFamily(fam)}
+                style={{ textTransform: 'capitalize' }}
+              >
+                {fam === 'claude' ? '🟣 Claude' : '🟢 OpenAI'}
+              </button>
+            ))}
+          </div>
+
+          <div className="admin-section-sub">
+            <div className="label" style={{ marginBottom: 8, fontWeight: 600, fontSize: 12 }}>Per-task models</div>
+            {Object.entries(TASK_LABELS).map(([task, label]) => (
+              <div key={task} className="task-model-row">
+                <span className="task-model-label">{label}</span>
+                <input
+                  className="task-model-input"
+                  value={taskModelDraft[task] || ''}
+                  onChange={(e) => setTaskModelDraft((d) => ({ ...d, [task]: e.target.value }))}
+                  placeholder={`Model name…`}
+                />
+              </div>
+            ))}
+            {taskModelsDirty && (
+              <div className="admin-row" style={{ marginTop: 10 }}>
+                <button className="admin-button" onClick={handleTaskModelsSave}>Save models</button>
+                <button
+                  className="admin-button secondary"
+                  onClick={() => setTaskModelDraft({ ...taskModels })}
+                >
+                  Reset
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Knowledge base */}
