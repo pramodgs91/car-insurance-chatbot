@@ -744,6 +744,132 @@ button { cursor: pointer; background: none; border: none; color: inherit; }
   margin-top: 8px;
 }
 
+/* ── Voice UI (Chat header + status bar) ─────────────────────────── */
+
+.voice-toggle.active {
+  background: rgba(255, 255, 255, 0.35);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+.voice-toggle.listening {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.6);
+  animation: pulse-red 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0); }
+}
+
+.voice-select {
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: var(--white);
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  outline: none;
+  cursor: pointer;
+}
+
+.voice-select option { color: var(--gray-800); background: var(--white); }
+
+.voice-status {
+  background: var(--primary-bg);
+  border-bottom: 1px solid var(--primary-light);
+  color: var(--primary-dark);
+  font-size: 12px;
+  padding: 5px 14px;
+  display: flex; align-items: center; gap: 6px;
+  flex-shrink: 0;
+  min-height: 28px;
+}
+
+.mic-btn.active {
+  background: #FEE2E2;
+  border-color: var(--danger);
+  color: var(--danger);
+  animation: pulse-red 1.2s ease-in-out infinite;
+}
+
+/* ── Voice UI (Admin panel) ───────────────────────────────────────── */
+
+.admin-section-sub {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--gray-500);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 14px 0 8px;
+}
+
+.voice-selects { display: flex; flex-direction: column; gap: 10px; }
+
+.voice-select-row {
+  display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap;
+}
+
+.voice-select-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray-700);
+  width: 90px;
+  flex-shrink: 0;
+}
+
+.voice-option-group { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.voice-option-btn {
+  padding: 5px 12px;
+  border: 1.5px solid var(--gray-300);
+  border-radius: 16px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray-700);
+  background: var(--white);
+  transition: all 0.15s;
+}
+
+.voice-option-btn:hover { border-color: var(--primary-light); color: var(--primary); }
+
+.voice-option-btn.active {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--white);
+}
+
+/* ── Task model inputs (Admin panel) ─────────────────────────────── */
+
+.task-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.task-model-label {
+  font-size: 12px;
+  color: var(--gray-700);
+  width: 140px;
+  flex-shrink: 0;
+}
+
+.task-model-input {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1.5px solid var(--gray-300);
+  border-radius: 8px;
+  font-size: 12px;
+  font-family: monospace;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.task-model-input:focus { border-color: var(--primary-light); }
+
 /* ── Responsive ───────────────────────────────────────────────────── */
 
 @media (min-width: 768px) {
