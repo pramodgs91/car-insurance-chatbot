@@ -2,7 +2,22 @@ services:
   - type: web
     name: car-insurance-chatbot
     runtime: docker
-    plan: free
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    region: singapore
+    branch: main
+    autoDeploy: true
+    healthCheckPath: /api/health
+    disk:
+      name: chatbot-data
+      mountPath: /data
+      sizeGB: 1
     envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: CLAUDE_MODEL
+        value: claude-haiku-4-5-20251001
       - key: ANTHROPIC_API_KEY
-        sync: false
+        sync: false   # set via Render dashboard
+      - key: ADMIN_PASSWORD
+        sync: false   # set via Render dashboard
