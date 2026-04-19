@@ -9,6 +9,7 @@ import {
   getVoiceGuide,
   classifyVoiceIntent,
 } from './api'
+import GoogleSignIn from './GoogleSignIn'
 
 const INITIAL_SUGGESTIONS = [
   'I want to buy car insurance',
@@ -77,7 +78,7 @@ function getSpeechLang(language) {
   return language === 'hindi' ? 'hi-IN' : 'en-IN'
 }
 
-export default function Chat({ onOpenAdmin }) {
+export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSignOut }) {
   const [messages, setMessages] = useState([])
   const [progressEvents, setProgressEvents] = useState([])
   const [streamingText, setStreamingText] = useState('')
@@ -788,7 +789,13 @@ export default function Chat({ onOpenAdmin }) {
           {started && (
             <button className="header-btn" onClick={handleReset}>New chat</button>
           )}
-          <button className="header-btn" onClick={onOpenAdmin}>Admin</button>
+          <button className="header-btn" onClick={onOpenAdmin} title="Open admin panel">⚙</button>
+          <GoogleSignIn
+            user={user}
+            googleClientId={googleClientId}
+            onSignIn={onSignIn}
+            onSignOut={onSignOut}
+          />
         </div>
       </div>
 

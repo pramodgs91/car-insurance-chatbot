@@ -1,11 +1,12 @@
 """
-FastAPI application — chat, voice, and admin APIs.
+FastAPI application — chat, voice, admin, and user auth APIs.
 """
 from __future__ import annotations
 
 import json
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote as urlquote
@@ -18,6 +19,7 @@ from pydantic import BaseModel
 
 from admin import AdminSession, RuntimeConfig, verify_password
 from admin.auth import admin_configured
+from auth import UserStore, UserSessionStore, google_configured, verify_google_token, GOOGLE_CLIENT_ID
 from version import VERSION
 from agent import Agent
 from extraction import extract_from_upload, format_for_agent, merge_into_session
@@ -31,6 +33,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 KB_STORE_PATH = DATA_DIR / "kb.json"
 CONFIG_STORE_PATH = DATA_DIR / "config.json"
 UPLOADS_DIR = DATA_DIR / "uploads"
+USERS_DIR = DATA_DIR / "users"
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -40,6 +43,8 @@ runtime_config = RuntimeConfig(CONFIG_STORE_PATH)
 model_router = ModelRouter(runtime_config)
 voice_service = VoiceService(runtime_config, model_router)
 admin_sessions = AdminSession()
+user_store = UserStore(USERS_DIR)
+user_session_store = UserSessionStore()
 agent = Agent(vector_store, runtime_config, model_router)
 
 # In-memory chat sessions
@@ -57,9 +62,15 @@ app.add_middleware(
 )
 
 
+# ── Pydantic models ────────────────────────────────────────────────────────
+
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
+
+
+class GoogleVerifyRequest(BaseModel):
+    credential: str
 
 
 class AdminLoginRequest(BaseModel):
@@ -140,27 +151,68 @@ class VoiceIntentRequest(BaseModel):
     stage: str | None = None
 
 
+# ── Helpers ────────────────────────────────────────────────────────────────
+
 def _require_admin(token: str | None) -> None:
     if not admin_sessions.validate(token):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-def _session_for(session_id: str | None) -> tuple[str, dict[str, Any]]:
+def _session_for(
+    session_id: str | None,
+    user_email: str | None = None,
+    user_name: str | None = None,
+) -> tuple[str, dict[str, Any]]:
     sid = session_id or str(uuid.uuid4())
     if sid not in sessions:
-        sessions[sid] = {"history": [], "data": {}}
+        sessions[sid] = {
+            "history": [],
+            "data": {},
+            "user_email": user_email,
+            "user_name": user_name,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "message_count": 0,
+            "last_stage": None,
+        }
+    elif user_email and not sessions[sid].get("user_email"):
+        sessions[sid]["user_email"] = user_email
+        sessions[sid]["user_name"] = user_name
     return sid, sessions[sid]
 
 
+def _get_user(x_user_token: str | None) -> tuple[str | None, str | None]:
+    """Return (email, name) for a valid user token, else (None, None)."""
+    info = user_session_store.get(x_user_token)
+    if not info:
+        return None, None
+    return info["email"], info["name"]
+
+
+# ── Chat endpoints ─────────────────────────────────────────────────────────
+
 @app.post("/api/chat/stream")
-async def chat_stream(req: ChatRequest):
-    session_id, session = _session_for(req.session_id)
+async def chat_stream(
+    req: ChatRequest,
+    x_user_token: str | None = Header(default=None),
+):
+    user_email, user_name = _get_user(x_user_token)
+    session_id, session = _session_for(req.session_id, user_email, user_name)
+    user_profile = user_store.load(user_email) if user_email else None
 
     async def generate():
         yield f"event: session\ndata: {json.dumps({'session_id': session_id})}\n\n"
         try:
-            async for evt in agent.stream(req.message, session["history"], session["data"]):
+            async for evt in agent.stream(
+                req.message, session["history"], session["data"], user_profile
+            ):
                 yield f"event: {evt['type']}\ndata: {json.dumps(evt)}\n\n"
+                if evt["type"] == "final":
+                    session["message_count"] = session.get("message_count", 0) + 1
+                    ux = evt.get("ux") or {}
+                    if ux.get("stage"):
+                        session["last_stage"] = ux["stage"]
+                    if user_email:
+                        user_store.merge_session(user_email, session["data"])
         except Exception as exc:
             err = {"type": "error", "text": str(exc)}
             yield f"event: error\ndata: {json.dumps(err)}\n\n"
@@ -169,12 +221,23 @@ async def chat_stream(req: ChatRequest):
 
 
 @app.post("/api/chat")
-async def chat_non_streaming(req: ChatRequest):
-    session_id, session = _session_for(req.session_id)
+async def chat_non_streaming(
+    req: ChatRequest,
+    x_user_token: str | None = Header(default=None),
+):
+    user_email, user_name = _get_user(x_user_token)
+    session_id, session = _session_for(req.session_id, user_email, user_name)
+    user_profile = user_store.load(user_email) if user_email else None
+
     final = {"response": "", "ux": None}
-    async for evt in agent.stream(req.message, session["history"], session["data"]):
+    async for evt in agent.stream(req.message, session["history"], session["data"], user_profile):
         if evt["type"] == "final":
             final = {"response": evt["text"], "ux": evt.get("ux")}
+            session["message_count"] = session.get("message_count", 0) + 1
+            if (evt.get("ux") or {}).get("stage"):
+                session["last_stage"] = evt["ux"]["stage"]
+            if user_email:
+                user_store.merge_session(user_email, session["data"])
         elif evt["type"] == "error":
             raise HTTPException(status_code=500, detail=evt["text"])
     return {"session_id": session_id, **final}
@@ -185,8 +248,12 @@ async def chat_upload_stream(
     file: UploadFile = File(...),
     session_id: str | None = Form(None),
     doc_hint: str | None = Form(None),
+    x_user_token: str | None = Header(default=None),
 ):
-    sid, session = _session_for(session_id)
+    user_email, user_name = _get_user(x_user_token)
+    sid, session = _session_for(session_id, user_email, user_name)
+    user_profile = user_store.load(user_email) if user_email else None
+
     data = await file.read()
     if len(data) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
@@ -219,8 +286,14 @@ async def chat_upload_stream(
         yield f"event: progress\ndata: {json.dumps({'type': 'progress', 'text': f'Extracted — {summary}'})}\n\n"
 
         try:
-            async for evt in agent.stream(synthetic, session["history"], session["data"]):
+            async for evt in agent.stream(synthetic, session["history"], session["data"], user_profile):
                 yield f"event: {evt['type']}\ndata: {json.dumps(evt)}\n\n"
+                if evt["type"] == "final":
+                    session["message_count"] = session.get("message_count", 0) + 1
+                    if (evt.get("ux") or {}).get("stage"):
+                        session["last_stage"] = evt["ux"]["stage"]
+                    if user_email:
+                        user_store.merge_session(user_email, session["data"])
         except Exception as exc:
             err = {"type": "error", "text": str(exc)}
             yield f"event: error\ndata: {json.dumps(err)}\n\n"
@@ -235,6 +308,50 @@ async def reset_session(session_id: str | None = None):
     return {"status": "ok"}
 
 
+# ── Auth endpoints ─────────────────────────────────────────────────────────
+
+@app.get("/api/auth/config")
+async def auth_config():
+    return {
+        "google_configured": google_configured(),
+        "google_client_id": GOOGLE_CLIENT_ID if google_configured() else None,
+    }
+
+
+@app.post("/api/auth/verify")
+async def auth_verify(req: GoogleVerifyRequest):
+    """Verify a Google ID token and issue a user session token."""
+    try:
+        user_info = await verify_google_token(req.credential)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Auth error: {exc}") from exc
+
+    email = user_info["email"]
+    name = user_info["name"]
+    user_store.update_name(email, name)
+    token = user_session_store.issue(email, name)
+    return {"token": token, "email": email, "name": name}
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(x_user_token: str | None = Header(default=None)):
+    if x_user_token:
+        user_session_store.revoke(x_user_token)
+    return {"status": "ok"}
+
+
+@app.get("/api/auth/me")
+async def auth_me(x_user_token: str | None = Header(default=None)):
+    info = user_session_store.get(x_user_token)
+    if not info:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return {"email": info["email"], "name": info["name"]}
+
+
+# ── Health / runtime ───────────────────────────────────────────────────────
+
 @app.get("/api/health")
 async def health():
     return {"status": "healthy", "admin_configured": admin_configured(), "version": VERSION}
@@ -244,6 +361,8 @@ async def health():
 async def public_runtime():
     return runtime_config.public_snapshot()
 
+
+# ── Voice endpoints ────────────────────────────────────────────────────────
 
 @app.post("/api/voice/tts")
 async def voice_tts(req: VoiceTTSRequest):
@@ -267,7 +386,6 @@ async def voice_speak(req: VoiceSpeakRequest):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message is required")
 
-    # Step 1 — get AI-generated spoken summary (fast, cached)
     try:
         guide = await voice_service.guide(
             message=req.message,
@@ -287,7 +405,6 @@ async def voice_speak(req: VoiceSpeakRequest):
 
     lang = req.language or "english"
 
-    # Step 2 — stream TTS audio back to client (no extra RTT vs separate /tts call)
     async def audio_stream():
         try:
             async for chunk in model_router.stream_speech(
@@ -335,6 +452,8 @@ async def voice_intent(req: VoiceIntentRequest):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+
+# ── Admin endpoints ────────────────────────────────────────────────────────
 
 @app.post("/api/admin/login")
 async def admin_login(req: AdminLoginRequest):
@@ -487,6 +606,27 @@ async def test_search(q: str, x_admin_token: str | None = Header(default=None)):
     _require_admin(x_admin_token)
     return {"results": vector_store.search(q, top_k=5)}
 
+
+@app.get("/api/admin/sessions")
+async def admin_list_sessions(x_admin_token: str | None = Header(default=None)):
+    _require_admin(x_admin_token)
+    result = []
+    for sid, s in sessions.items():
+        data_keys = [k for k, v in (s.get("data") or {}).items() if v]
+        result.append({
+            "session_id": sid,
+            "user_email": s.get("user_email"),
+            "user_name": s.get("user_name"),
+            "stage": s.get("last_stage"),
+            "data_keys": data_keys,
+            "message_count": s.get("message_count", 0),
+            "started_at": s.get("started_at"),
+        })
+    result.sort(key=lambda x: x["started_at"] or "", reverse=True)
+    return {"sessions": result}
+
+
+# ── Frontend static serving ────────────────────────────────────────────────
 
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 if frontend_dist.exists():

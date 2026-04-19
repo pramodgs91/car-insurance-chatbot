@@ -959,6 +959,103 @@ button { cursor: pointer; background: none; border: none; color: inherit; }
 
 .task-model-input:focus { border-color: var(--primary-light); }
 
+/* ── User badge + Google sign-in ──────────────────────────────────── */
+
+.google-signin-btn {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.google-signin-btn iframe {
+  transform: scale(0.82);
+  transform-origin: right center;
+}
+
+.user-badge-wrap { position: relative; flex-shrink: 0; }
+
+.user-badge {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.25);
+  border: 1.5px solid rgba(255, 255, 255, 0.5);
+  color: var(--white);
+  font-size: 11px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  letter-spacing: 0.02em;
+  cursor: pointer; transition: background 0.15s;
+}
+.user-badge:hover { background: rgba(255, 255, 255, 0.35); }
+
+.user-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  min-width: 200px;
+  z-index: 200;
+  overflow: hidden;
+}
+
+.user-menu-info { padding: 12px 14px 8px; border-bottom: 1px solid var(--gray-100); }
+.user-menu-name { font-size: 13px; font-weight: 600; color: var(--gray-900); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.user-menu-email { font-size: 11px; color: var(--gray-500); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.user-menu-signout {
+  display: block; width: 100%;
+  padding: 10px 14px; text-align: left;
+  font-size: 13px; color: var(--danger); font-weight: 500;
+}
+.user-menu-signout:hover { background: #FEF2F2; }
+
+/* ── Admin sessions ───────────────────────────────────────────────── */
+
+.session-card {
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.session-header {
+  display: flex; align-items: center;
+  justify-content: space-between;
+  gap: 8px; margin-bottom: 4px;
+}
+
+.session-user {
+  font-size: 12px; font-weight: 500;
+  color: var(--gray-800);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.session-stage {
+  font-size: 10px; font-weight: 600;
+  padding: 2px 7px; border-radius: 10px;
+  white-space: nowrap; flex-shrink: 0;
+  background: var(--gray-200); color: var(--gray-600);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.session-stage.stage-quote-shown,
+.session-stage.stage-plan-selection { background: #DBEAFE; color: #1E40AF; }
+.session-stage.stage-addons         { background: #D1FAE5; color: #065F46; }
+.session-stage.stage-review,
+.session-stage.stage-payment        { background: #FEF3C7; color: #92400E; }
+
+.session-meta { display: flex; gap: 12px; font-size: 11px; color: var(--gray-500); margin-bottom: 6px; }
+
+.session-keys { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.session-key-badge {
+  font-size: 10px; padding: 2px 6px;
+  background: var(--primary-bg); color: var(--primary-dark);
+  border-radius: 4px; font-weight: 500;
+}
+
 /* ── Responsive ───────────────────────────────────────────────────── */
 
 @media (min-width: 768px) {

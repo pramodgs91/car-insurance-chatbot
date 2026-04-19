@@ -119,7 +119,47 @@ _RAG_KEYWORDS = [
 ]
 
 
-def build_system_blocks(config: RuntimeConfig, rag_passages: list[dict] | None) -> list[dict]:
+USER_PROFILE_HEADER = """\
+## Returning user — saved context
+Facts below were saved from this user's previous sessions.
+
+Rules:
+- Use to avoid re-asking for stable data (registration, make/model, name).
+- ALWAYS reconfirm in-session for anything that can change: insurer choice, add-ons, IDV, plan type.
+- Surface naturally; don't recite the full list unprompted.
+"""
+
+
+def _build_user_block(profile: dict) -> dict | None:
+    vehicle = {k: v for k, v in (profile.get("vehicle_info") or {}).items() if v}
+    policy = {k: v for k, v in (profile.get("policy_info") or {}).items() if v}
+    prefs = {k: v for k, v in (profile.get("preferences") or {}).items() if v}
+    name = (profile.get("name") or "").strip()
+
+    if not any([name, vehicle, policy, prefs]):
+        return None
+
+    lines = [USER_PROFILE_HEADER]
+    if name:
+        lines.append(f"Name: {name}")
+    if vehicle:
+        lines.append("\nVehicle:")
+        lines.extend(f"  {k}: {v}" for k, v in vehicle.items())
+    if policy:
+        lines.append("\nPrevious policy:")
+        lines.extend(f"  {k}: {v}" for k, v in policy.items())
+    if prefs:
+        lines.append("\nPreferences:")
+        lines.extend(f"  {k}: {v}" for k, v in prefs.items())
+
+    return {"type": "text", "text": "\n".join(lines), "cache_control": {"type": "ephemeral"}}
+
+
+def build_system_blocks(
+    config: RuntimeConfig,
+    rag_passages: list[dict] | None,
+    user_profile: dict | None = None,
+) -> list[dict]:
     snapshot = config.snapshot()
     preset = snapshot["style_preset"]
 
@@ -135,7 +175,6 @@ def build_system_blocks(config: RuntimeConfig, rag_passages: list[dict] | None) 
     ]
 
     # Block 2: Custom instructions (separate cached block — changes when admin edits)
-    # Kept separate so Block 1 cache stays warm even when instructions change.
     enabled = [block for block in snapshot["custom_instructions"] if block["enabled"]]
     if enabled:
         custom_text = (
@@ -149,7 +188,13 @@ def build_system_blocks(config: RuntimeConfig, rag_passages: list[dict] | None) 
             {"type": "text", "text": custom_text, "cache_control": {"type": "ephemeral"}}
         )
 
-    # Block 3: RAG passages (dynamic — not cached, changes every turn)
+    # Block 3: User profile (cached per user — stable within a session)
+    if user_profile:
+        user_block = _build_user_block(user_profile)
+        if user_block:
+            blocks.append(user_block)
+
+    # Block 4: RAG passages (dynamic — not cached, changes every turn)
     if rag_passages:
         rendered = "\n\n".join(
             f"[{i + 1}] From \"{p['doc_name']}\": {p['text']}"
@@ -221,6 +266,7 @@ class Agent:
         user_message: str,
         history: list,
         session_data: dict,
+        user_profile: dict | None = None,
     ) -> AsyncIterator[dict]:
         cfg = self.config.snapshot()
         if cfg["latency_optimizations_enabled"]:
@@ -236,7 +282,7 @@ class Agent:
                 "text": f"Pulled {len(rag_passages)} reference passage(s) from the knowledge base",
             }
 
-        system_blocks = build_system_blocks(self.config, rag_passages)
+        system_blocks = build_system_blocks(self.config, rag_passages, user_profile)
         tool_schemas = self.tools.anthropic_schemas()
 
         for _ in range(6):

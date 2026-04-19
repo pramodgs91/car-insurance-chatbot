@@ -406,18 +406,25 @@ class OpenAIProvider:
         speed: float = 1.0,
         language: str = "english",
     ) -> bytes:
-        try:
-            response = await self.client.audio.speech.create(
-                model=model,
-                voice=voice,
-                input=text,
-                speed=max(0.25, min(speed, 4.0)),
-                response_format="mp3",
-                instructions=_indian_tts_instructions(language),
-            )
-            return await response.aread()
-        except Exception as exc:
-            raise ProviderError(str(exc)) from exc
+        base_kwargs: dict[str, Any] = dict(
+            model=model,
+            voice=voice,
+            input=text,
+            speed=max(0.25, min(speed, 4.0)),
+            response_format="mp3",
+        )
+        for kwargs in [
+            {**base_kwargs, "instructions": _indian_tts_instructions(language)},
+            base_kwargs,
+        ]:
+            try:
+                response = await self.client.audio.speech.create(**kwargs)
+                return await response.aread()
+            except Exception as exc:
+                last_exc = exc
+                if "instructions" not in kwargs:
+                    raise ProviderError(str(exc)) from exc
+        raise ProviderError(str(last_exc)) from last_exc
 
     async def stream_speech(
         self,
@@ -427,19 +434,28 @@ class OpenAIProvider:
         speed: float = 1.0,
         language: str = "english",
     ) -> AsyncIterator[bytes]:
-        try:
-            async with self.client.audio.speech.with_streaming_response.create(
-                model=model,
-                voice=voice,
-                input=text,
-                speed=max(0.25, min(speed, 4.0)),
-                response_format="mp3",
-                instructions=_indian_tts_instructions(language),
-            ) as response:
-                async for chunk in response.iter_bytes(chunk_size=4096):
-                    yield chunk
-        except Exception as exc:
-            raise ProviderError(str(exc)) from exc
+        base_kwargs: dict[str, Any] = dict(
+            model=model,
+            voice=voice,
+            input=text,
+            speed=max(0.25, min(speed, 4.0)),
+            response_format="mp3",
+        )
+        attempts = [
+            {**base_kwargs, "instructions": _indian_tts_instructions(language)},
+            base_kwargs,
+        ]
+        for i, kwargs in enumerate(attempts):
+            try:
+                async with self.client.audio.speech.with_streaming_response.create(**kwargs) as response:
+                    async for chunk in response.iter_bytes(chunk_size=4096):
+                        yield chunk
+                return
+            except ProviderError:
+                raise
+            except Exception as exc:
+                if i == len(attempts) - 1:
+                    raise ProviderError(str(exc)) from exc
 
     async def extract_document(
         self,

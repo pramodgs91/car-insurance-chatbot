@@ -3,7 +3,7 @@ import {
   adminLogin, adminLogout, getAdminConfig, setAdminStyle, toggleFeature,
   uploadKnowledge, deleteKnowledge, addInstruction, updateInstruction,
   deleteInstruction, listKnowledge, getHealth,
-  updateVoiceSettings, updateModelSettings,
+  updateVoiceSettings, updateModelSettings, getAdminSessions,
 } from './api'
 
 const FEATURE_LABELS = {
@@ -35,8 +35,8 @@ const TASK_LABELS = {
   document_extraction: 'Document extraction',
 }
 
-export default function Admin({ onClose }) {
-  const [token, setToken] = useState(() => sessionStorage.getItem('admin_token') || null)
+export default function Admin({ onClose, standalone = false }) {
+  const [token, setToken] = useState(() => localStorage.getItem('admin_token') || null)
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -48,6 +48,8 @@ export default function Admin({ onClose }) {
   const [adminAvailable, setAdminAvailable] = useState(true)
   const [appVersion, setAppVersion] = useState('')
   const [taskModelDraft, setTaskModelDraft] = useState({})
+  const [sessions, setSessions] = useState(null)
+  const [sessionsLoading, setSessionsLoading] = useState(false)
   const fileRef = useRef(null)
 
   useEffect(() => {
@@ -93,7 +95,7 @@ export default function Admin({ onClose }) {
     setLoading(true)
     try {
       const t = await adminLogin(password)
-      sessionStorage.setItem('admin_token', t)
+      localStorage.setItem('admin_token', t)
       setToken(t)
       setPassword('')
     } catch (err) {
@@ -105,10 +107,22 @@ export default function Admin({ onClose }) {
 
   const handleLogout = async () => {
     await adminLogout(token)
-    sessionStorage.removeItem('admin_token')
+    localStorage.removeItem('admin_token')
     setToken(null)
     setConfig(null)
     setKbDocs([])
+  }
+
+  const loadSessions = async () => {
+    setSessionsLoading(true)
+    try {
+      const data = await getAdminSessions(token)
+      setSessions(data.sessions)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSessionsLoading(false)
+    }
   }
 
   const handleStyle = async (style) => {
@@ -486,6 +500,47 @@ export default function Admin({ onClose }) {
               </button>
             </div>
           </div>
+        </div>
+
+        {/* Live sessions */}
+        <div className="admin-section">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+            <h3 style={{ margin: 0 }}>Live Sessions</h3>
+            <button className="admin-button secondary" onClick={loadSessions} disabled={sessionsLoading} style={{ fontSize: 11, padding: '4px 10px' }}>
+              {sessionsLoading ? 'Loading…' : sessions === null ? 'Load' : 'Refresh'}
+            </button>
+          </div>
+          {sessions === null && !sessionsLoading && (
+            <div style={{ fontSize: 12, color: 'var(--gray-400)' }}>Click Load to view active sessions.</div>
+          )}
+          {sessions && sessions.length === 0 && (
+            <div style={{ fontSize: 12, color: 'var(--gray-400)' }}>No active sessions right now.</div>
+          )}
+          {sessions && sessions.map((s) => (
+            <div key={s.session_id} className="session-card">
+              <div className="session-header">
+                <span className="session-user">
+                  {s.user_email ? `${s.user_name || ''} <${s.user_email}>` : 'Anonymous'}
+                </span>
+                <span className={`session-stage stage-${(s.stage || 'unknown').replace('_', '-')}`}>
+                  {s.stage || 'start'}
+                </span>
+              </div>
+              <div className="session-meta">
+                <span>💬 {s.message_count} messages</span>
+                {s.started_at && (
+                  <span>🕐 {new Date(s.started_at).toLocaleTimeString()}</span>
+                )}
+              </div>
+              {s.data_keys.length > 0 && (
+                <div className="session-keys">
+                  {s.data_keys.map((k) => (
+                    <span key={k} className="session-key-badge">{k}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       </div>
     </div>

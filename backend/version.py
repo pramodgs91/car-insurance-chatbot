@@ -1,3 +1,3 @@
 MAJOR = 1
-MINOR = 0
+MINOR = 1
 VERSION = f"{MAJOR}.{MINOR}"

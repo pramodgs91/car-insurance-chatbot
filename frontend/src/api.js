@@ -1,6 +1,11 @@
-// Centralized API client. Handles streaming chat, voice helpers, session, and admin.
+// Centralized API client. Handles streaming chat, voice helpers, session, admin, and user auth.
 
 const API_BASE = '/api'
+
+function userHeaders() {
+  const token = localStorage.getItem('user_token')
+  return token ? { 'X-User-Token': token } : {}
+}
 
 export async function resetSession(sessionId) {
   if (!sessionId) return
@@ -44,7 +49,7 @@ async function consumeSSE(response, onEvent) {
 export async function streamChat({ message, sessionId, onEvent, signal }) {
   const res = await fetch(`${API_BASE}/chat/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...userHeaders() },
     body: JSON.stringify({ message, session_id: sessionId }),
     signal,
   })
@@ -58,6 +63,7 @@ export async function uploadDocument({ file, sessionId, docHint, onEvent, signal
   if (docHint) fd.append('doc_hint', docHint)
   const res = await fetch(`${API_BASE}/chat/upload/stream`, {
     method: 'POST',
+    headers: userHeaders(),
     body: fd,
     signal,
   })
@@ -94,6 +100,38 @@ export async function classifyVoiceIntent(payload) {
     throw new Error(err.detail || `Voice intent failed (${res.status})`)
   }
   return res.json()
+}
+
+// ── User auth ────────────────────────────────────────────────────────────
+
+export async function getAuthConfig() {
+  const res = await fetch(`${API_BASE}/auth/config`)
+  return res.json()
+}
+
+export async function verifyGoogleCredential(credential) {
+  const res = await fetch(`${API_BASE}/auth/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ credential }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `Auth failed (${res.status})`)
+  }
+  return res.json()  // { token, email, name }
+}
+
+export async function userLogout() {
+  const token = localStorage.getItem('user_token')
+  if (!token) return
+  try {
+    await fetch(`${API_BASE}/auth/logout`, {
+      method: 'POST',
+      headers: { 'X-User-Token': token },
+    })
+  } catch {}
+  localStorage.removeItem('user_token')
 }
 
 // ── Admin ────────────────────────────────────────────────────────────────
@@ -227,6 +265,12 @@ export async function deleteInstruction(token, blockId) {
     headers: adminHeaders(token),
   })
   if (!res.ok) throw new Error(`Delete failed (${res.status})`)
+  return res.json()
+}
+
+export async function getAdminSessions(token) {
+  const res = await fetch(`${API_BASE}/admin/sessions`, { headers: adminHeaders(token) })
+  if (!res.ok) throw new Error(`Sessions fetch failed (${res.status})`)
   return res.json()
 }
 
