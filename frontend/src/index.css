@@ -159,59 +159,140 @@ button { cursor: pointer; background: none; border: none; color: inherit; }
   padding: 10px 14px;
   border-radius: 14px;
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.55;
   word-break: break-word;
   overflow-wrap: break-word;
+  overflow-x: hidden;
 }
 
 .message.bot .message-content {
-  background: var(--gray-50);
+  background: var(--white);
   border: 1px solid var(--gray-200);
   border-top-left-radius: 4px;
+  box-shadow: var(--shadow-sm);
 }
 
 .message.user .message-content {
-  background: var(--primary);
+  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
   color: var(--white);
   border-top-right-radius: 4px;
+  box-shadow: 0 2px 8px rgba(108, 43, 217, 0.25);
 }
 
 /* ── Markdown in bot messages ─────────────────────────────────────── */
 
 .message.bot .message-content h1,
-.message.bot .message-content h2,
+.message.bot .message-content h2 {
+  font-size: 14px; font-weight: 700; margin: 12px 0 5px;
+  color: var(--gray-900); border-bottom: 1px solid var(--gray-200);
+  padding-bottom: 4px;
+}
+.message.bot .message-content h1:first-child,
+.message.bot .message-content h2:first-child { margin-top: 4px; }
+
 .message.bot .message-content h3 {
-  font-size: 14px; font-weight: 700; margin: 10px 0 4px;
-  color: var(--gray-900);
+  font-size: 13px; font-weight: 700; margin: 10px 0 4px;
+  color: var(--primary-dark);
 }
 
-.message.bot .message-content h3 { font-size: 13px; color: var(--primary-dark); }
-.message.bot .message-content p { margin: 4px 0; }
+.message.bot .message-content p { margin: 5px 0; }
+.message.bot .message-content p:first-child { margin-top: 0; }
+.message.bot .message-content p:last-child { margin-bottom: 0; }
+
 .message.bot .message-content ul,
-.message.bot .message-content ol { padding-left: 20px; margin: 4px 0; }
-.message.bot .message-content li { margin: 2px 0; }
+.message.bot .message-content ol { padding-left: 18px; margin: 6px 0; }
+.message.bot .message-content li { margin: 3px 0; line-height: 1.5; }
+.message.bot .message-content li::marker { color: var(--primary); }
+
 .message.bot .message-content strong { color: var(--gray-900); font-weight: 600; }
+.message.bot .message-content em { color: var(--gray-600); }
+
+.message.bot .message-content a {
+  color: var(--primary); text-decoration: underline;
+  text-decoration-color: var(--primary-light);
+  text-underline-offset: 2px;
+}
+.message.bot .message-content a:hover { color: var(--primary-dark); }
+
+.message.bot .message-content blockquote {
+  border-left: 3px solid var(--primary-light);
+  padding: 4px 10px;
+  margin: 8px 0;
+  color: var(--gray-600);
+  background: var(--primary-bg);
+  border-radius: 0 6px 6px 0;
+  font-size: 13px;
+}
+
+.message.bot .message-content hr {
+  border: none; border-top: 1px solid var(--gray-200);
+  margin: 10px 0;
+}
 
 .message.bot .message-content code {
-  background: var(--gray-200); padding: 1px 4px;
+  background: var(--gray-100); padding: 1px 5px;
   border-radius: 4px; font-size: 12px;
+  border: 1px solid var(--gray-200);
+  font-family: ui-monospace, monospace;
+}
+
+/* ── Tables in bot messages ───────────────────────────────────────── */
+
+/* Scroll wrapper — since ReactMarkdown renders bare <table> we can't add
+   a wrapper element, so make the message-content itself the scroll host. */
+.message.bot .message-content {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .message.bot .message-content table {
-  width: 100%; border-collapse: collapse;
-  margin: 8px 0; font-size: 12px;
-  display: block; overflow-x: auto;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 10px 0;
+  font-size: 12.5px;
+  border-radius: 8px;
+  border: 1px solid var(--gray-200);
+  overflow: hidden;
+  min-width: 100%;
+  table-layout: auto;
 }
 
+.message.bot .message-content thead tr th:first-child { border-top-left-radius: 8px; }
+.message.bot .message-content thead tr th:last-child { border-top-right-radius: 8px; }
+
 .message.bot .message-content th {
-  background: var(--primary-bg); color: var(--primary-dark);
-  font-weight: 600; padding: 6px; text-align: left;
+  background: var(--primary-bg);
+  color: var(--primary-dark);
+  font-weight: 700;
+  padding: 8px 10px;
+  text-align: left;
   border-bottom: 2px solid var(--primary-light);
   white-space: nowrap;
+  font-size: 12px;
+  letter-spacing: 0.01em;
 }
 
 .message.bot .message-content td {
-  padding: 6px; border-bottom: 1px solid var(--gray-200);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--gray-100);
+  vertical-align: top;
+  /* prevent breaking currency/number strings */
+  word-break: normal;
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+
+/* Last column (Why pick / description) — short enough to not need wrapping */
+.message.bot .message-content td:last-child,
+.message.bot .message-content th:last-child {
+  white-space: nowrap;
+}
+
+.message.bot .message-content tr:last-child td { border-bottom: none; }
+.message.bot .message-content tbody tr:nth-child(even) td { background: var(--gray-50); }
+.message.bot .message-content tbody tr:hover td {
+  background: var(--primary-bg);
+  transition: background 0.12s;
 }
 
 /* ── Progress pill ────────────────────────────────────────────────── */
