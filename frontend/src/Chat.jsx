@@ -1065,8 +1065,8 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
         <Welcome
           user={user}
           onStart={(mode) => {
-            if (mode === 'voice' && inputAvailable) toggleListening()
-            else setStarted(true)
+            send("Hi, I'd like to get car insurance")
+            if (mode === 'voice' && inputAvailable) setTimeout(toggleListening, 400)
           }}
           onUpload={triggerFilePicker}
         />
@@ -1135,15 +1135,17 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
             </svg>
           </button>
         </div>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept={ACCEPTED_UPLOAD_TYPES}
-          multiple
-          style={{ display: 'none' }}
-          onChange={handleFileChange}
-        />
       </div>}
+
+      {/* Always in DOM so triggerFilePicker works from the welcome screen too */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={ACCEPTED_UPLOAD_TYPES}
+        multiple
+        style={{ display: 'none' }}
+        onChange={handleFileChange}
+      />
     </>
   )
 }
