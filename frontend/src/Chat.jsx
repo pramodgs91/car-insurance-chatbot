@@ -214,6 +214,7 @@ export default function Chat({ onOpenAdmin }) {
           text,
           voice: voicePrefs.ttsVoice || 'alloy',
           speed: speedMap[voicePrefs.speed] || 1.0,
+          language: voicePrefs.language,
         }),
       })
       if (res.ok) {
@@ -271,29 +272,118 @@ export default function Chat({ onOpenAdmin }) {
     forcePlay = false,
   }) => {
     if (!message || !outputAvailable) return null
-    setVoiceStatus(query ? 'Explaining the current screen...' : 'Preparing voice guide...')
+    if (!voicePrefs.autoPlay && !forcePlay) return null
+
+    setVoiceStatus('Preparing voice...')
+    if (voicePrefs.interruptible) stopSpeaking()
+
+    const speedMap = { slow: 0.75, normal: 1.0, fast: 1.25 }
+    const body = JSON.stringify({
+      message,
+      ux: nextUx,
+      stage,
+      query,
+      language: voicePrefs.language,
+      detail_level: voicePrefs.detailLevel,
+      tone: voicePrefs.tone,
+      voice: voicePrefs.ttsVoice || 'alloy',
+      speed: speedMap[voicePrefs.speed] || 1.0,
+    })
+
     try {
-      const response = await getVoiceGuide({
-        message,
-        ux: nextUx,
-        stage,
-        query,
-        language: voicePrefs.language,
-        detail_level: voicePrefs.detailLevel,
-        tone: voicePrefs.tone,
+      const res = await fetch('/api/voice/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
       })
-      const spoken = response.text || ''
-      if ((voicePrefs.autoPlay || forcePlay) && voicePrefs.outputEnabled) {
-        speakText(spoken)
-      } else {
-        setVoiceStatus(spoken ? `Voice ready: ${spoken}` : '')
+      if (!res.ok) throw new Error(`${res.status}`)
+
+      const spokenText = res.headers.get('X-Voice-Text') || ''
+      spokenTextRef.current = spokenText
+      setVoiceStatus('Speaking...')
+
+      // Try MediaSource streaming — playback starts on first chunk (~200ms)
+      const mimeType = 'audio/mpeg'
+      if (
+        typeof MediaSource !== 'undefined' &&
+        MediaSource.isTypeSupported?.(mimeType) &&
+        res.body
+      ) {
+        try {
+          await _playStreamingAudio(res.body, mimeType)
+          return spokenText
+        } catch {
+          // fall through to blob
+        }
       }
-      return spoken
+
+      // Blob fallback (Safari, Firefox)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio(url)
+      currentAudioRef.current = audio
+      audio.play()
+      audio.onended = () => {
+        URL.revokeObjectURL(url)
+        currentAudioRef.current = null
+        setVoiceStatus('')
+        spokenTextRef.current = ''
+      }
+      return spokenText
     } catch (err) {
       setVoiceStatus(`Voice unavailable: ${err.message}`)
       return null
     }
-  }, [outputAvailable, speakText, voicePrefs])
+
+    async function _playStreamingAudio(body, mimeType) {
+      return new Promise((resolve, reject) => {
+        const ms = new MediaSource()
+        const audio = new Audio()
+        const msUrl = URL.createObjectURL(ms)
+        audio.src = msUrl
+        currentAudioRef.current = audio
+
+        ms.addEventListener('sourceopen', async () => {
+          let sb
+          try {
+            sb = ms.addSourceBuffer(mimeType)
+          } catch (e) { reject(e); return }
+
+          const reader = body.getReader()
+          let started = false
+
+          const pump = async () => {
+            const { done, value } = await reader.read()
+            if (done) {
+              if (!sb.updating) { try { ms.endOfStream() } catch {} }
+              else sb.addEventListener('updateend', () => { try { ms.endOfStream() } catch {} }, { once: true })
+              resolve()
+              return
+            }
+            const append = () => {
+              try { sb.appendBuffer(value) } catch (e) { reject(e); return }
+              if (!started) {
+                started = true
+                audio.play().catch(() => {})
+              }
+            }
+            if (sb.updating) sb.addEventListener('updateend', () => { append(); pump() }, { once: true })
+            else { append(); pump() }
+          }
+
+          pump()
+        }, { once: true })
+
+        audio.onended = () => {
+          URL.revokeObjectURL(msUrl)
+          currentAudioRef.current = null
+          setVoiceStatus('')
+          spokenTextRef.current = ''
+        }
+        audio.onerror = reject
+      })
+    }
+  }, [outputAvailable, stopSpeaking, voicePrefs])
 
   const handleEvent = useCallback((evt) => {
     if (evt.type === 'session') {

@@ -10,7 +10,7 @@ import io
 import json
 import os
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncGenerator, AsyncIterator
 
 from dotenv import load_dotenv
 
@@ -22,6 +22,15 @@ load_dotenv(Path(__file__).parent / ".env", override=True)
 
 class ProviderError(RuntimeError):
     """Raised when a provider call cannot be completed."""
+
+
+def _indian_tts_instructions(language: str) -> str:
+    if language == "hindi":
+        return "Speak in natural, fluent Hindi with a warm and helpful tone, like a friendly Indian insurance advisor."
+    return (
+        "Speak with a warm, natural Indian English accent — clear, friendly, and reassuring, "
+        "like a knowledgeable insurance advisor from India."
+    )
 
 
 def _flatten_system_text(system_blocks: list[dict] | str | None) -> str:
@@ -395,6 +404,7 @@ class OpenAIProvider:
         text: str,
         voice: str = "alloy",
         speed: float = 1.0,
+        language: str = "english",
     ) -> bytes:
         try:
             response = await self.client.audio.speech.create(
@@ -403,8 +413,31 @@ class OpenAIProvider:
                 input=text,
                 speed=max(0.25, min(speed, 4.0)),
                 response_format="mp3",
+                instructions=_indian_tts_instructions(language),
             )
             return await response.aread()
+        except Exception as exc:
+            raise ProviderError(str(exc)) from exc
+
+    async def stream_speech(
+        self,
+        model: str,
+        text: str,
+        voice: str = "alloy",
+        speed: float = 1.0,
+        language: str = "english",
+    ) -> AsyncIterator[bytes]:
+        try:
+            async with self.client.audio.speech.with_streaming_response.create(
+                model=model,
+                voice=voice,
+                input=text,
+                speed=max(0.25, min(speed, 4.0)),
+                response_format="mp3",
+                instructions=_indian_tts_instructions(language),
+            ) as response:
+                async for chunk in response.iter_bytes(chunk_size=4096):
+                    yield chunk
         except Exception as exc:
             raise ProviderError(str(exc)) from exc
 
@@ -558,7 +591,12 @@ class ModelRouter:
             tool_schema=tool_schema,
         )
 
-    async def synthesize_speech(self, text: str, voice: str = "alloy", speed: float = 1.0) -> bytes:
+    async def synthesize_speech(self, text: str, voice: str = "alloy", speed: float = 1.0, language: str = "english") -> bytes:
         # TTS is always OpenAI — Anthropic has no TTS offering.
         provider = self._provider("openai")
-        return await provider.synthesize_speech(model="gpt-4o-mini-tts", text=text, voice=voice, speed=speed)
+        return await provider.synthesize_speech(model="gpt-4o-mini-tts", text=text, voice=voice, speed=speed, language=language)
+
+    async def stream_speech(self, text: str, voice: str = "alloy", speed: float = 1.0, language: str = "english") -> AsyncGenerator[bytes, None]:
+        provider = self._provider("openai")
+        async for chunk in provider.stream_speech(model="gpt-4o-mini-tts", text=text, voice=voice, speed=speed, language=language):
+            yield chunk

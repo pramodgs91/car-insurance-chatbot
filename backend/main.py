@@ -106,6 +106,19 @@ class VoiceTTSRequest(BaseModel):
     text: str
     voice: str = "alloy"
     speed: float = 1.0
+    language: str = "english"
+
+
+class VoiceSpeakRequest(BaseModel):
+    message: str
+    ux: dict | None = None
+    stage: str | None = None
+    language: str | None = None
+    detail_level: str | None = None
+    tone: str | None = None
+    query: str | None = None
+    voice: str = "alloy"
+    speed: float = 1.0
 
 
 class VoiceGuideRequest(BaseModel):
@@ -239,10 +252,57 @@ async def voice_tts(req: VoiceTTSRequest):
             text=req.text[:2000],
             voice=req.voice,
             speed=req.speed,
+            language=req.language,
         )
         return Response(content=audio, media_type="audio/mpeg")
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"TTS unavailable: {exc}") from exc
+
+
+@app.post("/api/voice/speak")
+async def voice_speak(req: VoiceSpeakRequest):
+    """Merged guide + TTS: one round-trip, streams audio back as chunked mp3."""
+    if not req.message.strip():
+        raise HTTPException(status_code=400, detail="message is required")
+
+    # Step 1 — get AI-generated spoken summary (fast, cached)
+    try:
+        guide = await voice_service.guide(
+            message=req.message,
+            ux=req.ux,
+            stage=req.stage,
+            language=req.language,
+            detail_level=req.detail_level,
+            tone=req.tone,
+            query=req.query,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    spoken = (guide.get("text") or "").strip()
+    if not spoken:
+        raise HTTPException(status_code=204, detail="Nothing to speak")
+
+    lang = req.language or "english"
+
+    # Step 2 — stream TTS audio back to client (no extra RTT vs separate /tts call)
+    async def audio_stream():
+        try:
+            async for chunk in model_router.stream_speech(
+                text=spoken[:2000],
+                voice=req.voice,
+                speed=req.speed,
+                language=lang,
+            ):
+                yield chunk
+        except Exception:
+            return
+
+    return StreamingResponse(
+        audio_stream(),
+        media_type="audio/mpeg",
+        headers={"X-Voice-Text": spoken[:300]},
+    )
 
 
 @app.post("/api/voice/guide")
