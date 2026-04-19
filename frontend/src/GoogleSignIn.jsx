@@ -24,7 +24,7 @@ export default function GoogleSignIn({ user, googleClientId, onSignIn, onSignOut
       })
       if (btnRef.current) {
         window.google.accounts.id.renderButton(btnRef.current, {
-          theme: 'outline',
+          theme: 'filled_black',
           size: 'medium',
           shape: 'pill',
           text: 'signin',

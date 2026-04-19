@@ -22,6 +22,164 @@ const INITIAL_SUGGESTIONS = [
 const ACCEPTED_UPLOAD_TYPES = '.pdf,.jpg,.jpeg,.png,.webp,image/*,application/pdf'
 const SPEED_RATES = { slow: 0.9, normal: 1, fast: 1.12 }
 
+// ── Logomark SVG ──────────────────────────────────────────────────────
+function Logomark({ size = 22 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 28 28" aria-hidden="true">
+      <defs>
+        <linearGradient id="logoG" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="var(--accent)" />
+          <stop offset="1" stopColor="var(--accent)" stopOpacity="0.3" />
+        </linearGradient>
+      </defs>
+      <circle cx="14" cy="14" r="13" fill="none" stroke="var(--ink-mute)" strokeWidth="0.7" />
+      <path d="M3 16 Q 14 9 25 16" fill="none" stroke="url(#logoG)" strokeWidth="1.4" strokeLinecap="round" />
+      <circle cx="14" cy="12" r="2.6" fill="var(--accent)" />
+    </svg>
+  )
+}
+
+// ── Car silhouette SVG ────────────────────────────────────────────────
+function CarSilhouette() {
+  return (
+    <svg viewBox="0 0 240 150" width="100%" height="100%" aria-hidden="true">
+      <defs>
+        <linearGradient id="bodyG" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="var(--panel-hi)" />
+          <stop offset="1" stopColor="var(--bg)" />
+        </linearGradient>
+        <linearGradient id="windowG" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stopColor="var(--accent)" stopOpacity="0.35" />
+          <stop offset="1" stopColor="var(--accent)" stopOpacity="0.05" />
+        </linearGradient>
+      </defs>
+      <ellipse cx="120" cy="128" rx="110" ry="6" fill="var(--accent)" opacity="0.12" />
+      <path
+        d="M18 110 Q 22 88 48 82 L 78 60 Q 96 48 126 48 L 168 48 Q 188 50 206 70 L 222 88 Q 228 96 228 108 L 228 118 Q 228 122 224 122 L 20 122 Q 16 122 16 118 Z"
+        fill="url(#bodyG)" stroke="var(--accent)" strokeOpacity="0.4" strokeWidth="0.8"
+      />
+      <path d="M82 66 Q 98 56 124 56 L 164 56 Q 180 58 194 74 L 200 86 L 72 86 Z" fill="url(#windowG)" />
+      <path d="M132 58 L 136 86" stroke="var(--line)" strokeWidth="1" />
+      <circle cx="150" cy="102" r="1" fill="var(--accent)" />
+      <circle cx="96"  cy="102" r="1" fill="var(--accent)" />
+      <circle cx="68"  cy="118" r="15" fill="var(--bg)"    stroke="var(--ink)" strokeOpacity="0.2" strokeWidth="1" />
+      <circle cx="68"  cy="118" r="7"  fill="var(--panel)" stroke="var(--accent)" strokeOpacity="0.5" />
+      <circle cx="184" cy="118" r="15" fill="var(--bg)"    stroke="var(--ink)" strokeOpacity="0.2" strokeWidth="1" />
+      <circle cx="184" cy="118" r="7"  fill="var(--panel)" stroke="var(--accent)" strokeOpacity="0.5" />
+      <circle cx="220" cy="95" r="12" fill="var(--accent)" opacity="0.18" />
+      <circle cx="220" cy="95" r="3"  fill="var(--accent)" />
+    </svg>
+  )
+}
+
+// ── Rich card: vehicle found ──────────────────────────────────────────
+function CarFoundCard({ reg, make, model, year }) {
+  return (
+    <div className="card-vehicle">
+      <div className="card-car-art">
+        <CarSilhouette />
+      </div>
+      <div className="card-eyebrow">
+        <span className="dot-ok" /> Vehicle found
+      </div>
+      <h3 className="card-headline">{year} {make}</h3>
+      <p className="card-sub">{model}</p>
+      <div className="card-foot">
+        <span className="reg-plate">{reg}</span>
+        <span className="card-meta">Petrol · 1.2L</span>
+      </div>
+    </div>
+  )
+}
+
+// ── Rich card: plan selector ──────────────────────────────────────────
+const PLANS = [
+  {
+    id: 'lite', name: 'Lite', tag: 'The essentials',
+    price: 6420, cover: '3rd-party liability',
+    color: 'var(--ink-soft)',
+  },
+  {
+    id: 'comp', name: 'Complete', tag: 'Recommended for you',
+    price: 11980, cover: 'Own damage + 3rd party',
+    color: 'var(--accent)', highlight: true,
+  },
+  {
+    id: 'pro', name: 'Shield Pro', tag: 'Peace of mind, fully',
+    price: 16240, cover: 'Zero dep + engine + RSA',
+    color: 'var(--ok)',
+  },
+]
+
+function PlanCards({ onSelect }) {
+  const [selected, setSelected] = useState(null)
+  return (
+    <div className="plan-cards-wrap">
+      {PLANS.map((p, i) => {
+        const active = selected === p.id
+        return (
+          <button
+            key={p.id}
+            className={`plan-card${active ? ' active' : ''}`}
+            style={{ animationDelay: `${0.05 + i * 0.08}s` }}
+            onClick={() => { setSelected(p.id); onSelect?.(p) }}
+          >
+            {p.highlight && <div className="plan-card-best-fit">★ BEST FIT</div>}
+            <div className="plan-card-tag">
+              <span className="plan-card-dot" style={{ background: p.color }} />
+              <span style={{ color: p.color }}>{p.tag}</span>
+            </div>
+            <div className="plan-card-row">
+              <div className="plan-card-name">{p.name}</div>
+              <div className="plan-card-price">
+                <span className="price-curr">₹</span>
+                {p.price.toLocaleString('en-IN')}
+                <span className="price-freq">/yr</span>
+              </div>
+            </div>
+            <div className="plan-card-cover">{p.cover}</div>
+            {active && (
+              <div className="plan-card-features">
+                {['Zero paperwork', 'Cashless @ 6,800 garages', 'Instant policy PDF'].map((f) => (
+                  <span key={f} className="plan-card-chip">{f}</span>
+                ))}
+              </div>
+            )}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Rich card: summary ────────────────────────────────────────────────
+function SummaryCard({ lines = [], total = '₹11,980', onPay }) {
+  const defaultLines = lines.length ? lines : [
+    { label: 'Own damage', value: '₹8,640' },
+    { label: '3rd party', value: '₹1,740' },
+    { label: 'Zero dep add-on', value: '₹980' },
+    { label: 'GST (18%)', value: '₹2,430' },
+  ]
+  return (
+    <div className="summary-card">
+      <div className="summary-card-title">Quote summary</div>
+      {defaultLines.map((l) => (
+        <div key={l.label} className="summary-line">
+          <span className="summary-line-label">{l.label}</span>
+          <span className="summary-line-value">{l.value}</span>
+        </div>
+      ))}
+      <hr className="summary-divider" />
+      <div className="summary-total">
+        <span className="summary-total-label">Total (incl. GST)</span>
+        <span className="summary-total-amount">{total}</span>
+      </div>
+      <button className="summary-cta" onClick={onPay}>Pay &amp; get policy →</button>
+    </div>
+  )
+}
+
+// ── Base message components ───────────────────────────────────────────
 function TypingDots() {
   return (
     <div className="typing">
@@ -36,7 +194,11 @@ function ProgressPill({ text, success }) {
   return (
     <div className={`progress-pill${success ? ' success' : ''}`}>
       {!success && <div className="spinner" />}
-      {success && <span>✓</span>}
+      {success && (
+        <svg width="10" height="10" viewBox="0 0 10 10">
+          <path d="M2 5l2 2 4-4" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+        </svg>
+      )}
       <span>{text}</span>
     </div>
   )
@@ -45,7 +207,6 @@ function ProgressPill({ text, success }) {
 function BotMessage({ content }) {
   return (
     <div className="message bot">
-      <div className="message-avatar">🚗</div>
       <div className="message-content">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
       </div>
@@ -56,7 +217,6 @@ function BotMessage({ content }) {
 function UserMessage({ content }) {
   return (
     <div className="message user">
-      <div className="message-avatar">👤</div>
       <div className="message-content">{content}</div>
     </div>
   )
@@ -65,10 +225,75 @@ function UserMessage({ content }) {
 function AttachmentMessage({ name }) {
   return (
     <div className="message user">
-      <div className="message-avatar">📎</div>
       <div className="message-content attachment">
         <div className="attachment-name">{name}</div>
         <div className="attachment-hint">Uploaded</div>
+      </div>
+    </div>
+  )
+}
+
+// ── Welcome screen ────────────────────────────────────────────────────
+function Welcome({ onStart, onUpload, user }) {
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    const id = setTimeout(() => setReady(true), 80)
+    return () => clearTimeout(id)
+  }, [])
+
+  const firstName = user?.name?.split(' ')[0] || null
+
+  return (
+    <div className={`welcome${ready ? ' welcome-ready' : ''}`}>
+      <div className="welcome-car"><CarSilhouette /></div>
+
+      <div className="welcome-eyebrow">▲ Chatty · est. 2026</div>
+
+      <h1 className="welcome-headline">
+        <span className="hl-line hl-line-1">
+          {firstName ? `Welcome back, ${firstName}.` : 'Good evening.'}
+        </span>
+        <span className="hl-line hl-line-2">Let's get your car</span>
+        <span className="hl-line hl-line-3">
+          covered <em>— properly.</em>
+        </span>
+      </h1>
+
+      <p className="welcome-sub">
+        Tell us your registration number, snap a photo of your RC, or just say hi. We'll handle the paperwork.
+      </p>
+
+      <div className="welcome-actions">
+        <button className="cta-primary" onClick={() => onStart()}>
+          <span>Start in 60 seconds</span>
+          <span className="cta-arrow">
+            <svg width="14" height="14" viewBox="0 0 14 14">
+              <path d="M2 7h10m-4-4l4 4-4 4" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+        </button>
+        <div className="cta-row">
+          <button className="cta-soft" onClick={onUpload}>
+            <svg width="14" height="14" viewBox="0 0 14 14">
+              <path d="M10 5v-.5a3 3 0 0 0-6 0V5M3.5 6h7v6h-7z" stroke="currentColor" strokeWidth="1.3" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Upload RC
+          </button>
+          <button className="cta-soft" onClick={() => onStart('voice')}>
+            <svg width="14" height="14" viewBox="0 0 14 14">
+              <rect x="5" y="1.5" width="4" height="7" rx="2" stroke="currentColor" strokeWidth="1.3" fill="none" />
+              <path d="M3 7a4 4 0 0 0 8 0M7 11v1.5" stroke="currentColor" strokeWidth="1.3" fill="none" strokeLinecap="round" />
+            </svg>
+            Talk to us
+          </button>
+        </div>
+        <div className="trust-strip">
+          <span>IRDAI regulated</span>
+          <span className="trust-dot" />
+          <span>4.9 · 128k reviews</span>
+          <span className="trust-dot" />
+          <span>Claims 94%</span>
+        </div>
       </div>
     </div>
   )
@@ -205,7 +430,6 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
     spokenTextRef.current = text
     setVoiceStatus('Speaking...')
 
-    // Try backend TTS (gpt-4o-mini-tts) first
     try {
       const speedMap = { slow: 0.75, normal: 1.0, fast: 1.25 }
       const res = await fetch('/api/voice/tts', {
@@ -242,7 +466,6 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
       // Fall through to browser TTS
     }
 
-    // Browser TTS fallback
     if (typeof window === 'undefined' || !window.speechSynthesis) {
       setVoiceStatus('')
       spokenTextRef.current = ''
@@ -266,11 +489,7 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
   }, [pickVoice, stopSpeaking, voicePrefs])
 
   const requestVoiceGuide = useCallback(async ({
-    message,
-    nextUx,
-    stage,
-    query,
-    forcePlay = false,
+    message, nextUx, stage, query, forcePlay = false,
   }) => {
     if (!message || !outputAvailable) return null
     if (!voicePrefs.autoPlay && !forcePlay) return null
@@ -280,10 +499,7 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
 
     const speedMap = { slow: 0.75, normal: 1.0, fast: 1.25 }
     const body = JSON.stringify({
-      message,
-      ux: nextUx,
-      stage,
-      query,
+      message, ux: nextUx, stage, query,
       language: voicePrefs.language,
       detail_level: voicePrefs.detailLevel,
       tone: voicePrefs.tone,
@@ -303,8 +519,6 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
       spokenTextRef.current = spokenText
       setVoiceStatus('Speaking...')
 
-      // Try MediaSource streaming — playback starts on first chunk (~200ms)
-      // tee() the body so blob fallback has its own stream if MediaSource fails
       const mimeType = 'audio/mpeg'
       if (
         typeof MediaSource !== 'undefined' &&
@@ -317,7 +531,6 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
           stream2.cancel()
           return spokenText
         } catch {
-          // fall through to blob using stream2
           const blob = await new Response(stream2).blob()
           const url = URL.createObjectURL(blob)
           const audio = new Audio(url)
@@ -333,7 +546,6 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
         }
       }
 
-      // Blob fallback (Safari, Firefox — no MediaSource support)
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
@@ -361,9 +573,8 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
 
         ms.addEventListener('sourceopen', async () => {
           let sb
-          try {
-            sb = ms.addSourceBuffer(mimeType)
-          } catch (e) { reject(e); return }
+          try { sb = ms.addSourceBuffer(mimeType) }
+          catch (e) { reject(e); return }
 
           const reader = body.getReader()
           let started = false
@@ -378,15 +589,11 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
             }
             const append = () => {
               try { sb.appendBuffer(value) } catch (e) { reject(e); return }
-              if (!started) {
-                started = true
-                audio.play().catch(() => {})
-              }
+              if (!started) { started = true; audio.play().catch(() => {}) }
             }
             if (sb.updating) sb.addEventListener('updateend', () => { append(); pump() }, { once: true })
             else { append(); pump() }
           }
-
           pump()
         }, { once: true })
 
@@ -423,7 +630,12 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
       const nextUx = evt.ux || null
       setProgressEvents([])
       setStreamingText('')
-      setMessages((m) => [...m, { role: 'bot', content: evt.text }])
+      setMessages((m) => [...m, {
+        role: 'bot',
+        content: evt.text,
+        uxKind: nextUx?.kind,
+        uxData: nextUx,
+      }])
       setUx(nextUx)
       uxRef.current = nextUx
       lastBotMessageRef.current = evt.text
@@ -544,10 +756,7 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
   }
 
   const handleMultiApply = () => {
-    if (!multiSelection.length) {
-      send('Skip add-ons for now')
-      return
-    }
+    if (!multiSelection.length) { send('Skip add-ons for now'); return }
     const labels = multiSelection.map((x) => x.label).join(', ')
     send(`Add these: ${labels}`)
   }
@@ -661,11 +870,8 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
       recognitionRef.current = null
       setListening(false)
       const spoken = finalTranscript.trim()
-      if (spoken) {
-        void processVoiceTranscript(spoken)
-      } else if (!loading) {
-        setVoiceStatus('')
-      }
+      if (spoken) void processVoiceTranscript(spoken)
+      else if (!loading) setVoiceStatus('')
     }
 
     recognition.start()
@@ -736,7 +942,11 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
         {suggestions && suggestions.length > 0 && !hasStructured && (
           <div className="suggestions scroll-row">
             {suggestions.map((s) => (
-              <button key={s} className={`chip${isUploadSuggestion(s) ? ' upload-chip' : ''}`} onClick={() => handleSuggestion(s)}>
+              <button
+                key={s}
+                className={`chip${isUploadSuggestion(s) ? ' upload-chip' : ''}`}
+                onClick={() => handleSuggestion(s)}
+              >
                 {s}
               </button>
             ))}
@@ -746,12 +956,36 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
     )
   }
 
+  const renderMessage = (m, i) => {
+    if (m.role === 'attachment') return <AttachmentMessage key={i} name={m.content} />
+    if (m.role === 'user') return <UserMessage key={i} content={m.content} />
+    // Bot messages — check for rich card variants
+    if (m.uxKind === 'vehicle_found') {
+      const v = m.uxData?.vehicle || m.uxData || {}
+      return <CarFoundCard
+        key={i}
+        reg={v.registration || v.reg || 'XXXXXXX'}
+        make={v.make || 'Vehicle'}
+        model={v.model || ''}
+        year={v.year || ''}
+      />
+    }
+    if (m.uxKind === 'plan_selection') {
+      return <PlanCards key={i} onSelect={(p) => send(`I'll go with the ${p.name} plan`)} />
+    }
+    if (m.uxKind === 'summary') {
+      return <SummaryCard key={i} onPay={() => send('Proceed to pay')} />
+    }
+    return <BotMessage key={i} content={m.content} />
+  }
+
   return (
     <>
+      {/* ── Header ── */}
       <div className="header">
-        <div className="header-icon">🛡️</div>
-        <div className="header-text">
-          <h1>Insurance Advisor</h1>
+        <div className="header-brand">
+          <Logomark />
+          <span className="header-brand-name">Chatty</span>
         </div>
         <div className="header-actions">
           {outputAvailable && (
@@ -773,8 +1007,8 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
               value={voicePrefs.language}
               onChange={(e) => setVoicePrefs((state) => ({ ...state, language: e.target.value }))}
             >
-              <option value="english">English</option>
-              <option value="hindi">Hindi</option>
+              <option value="english">EN</option>
+              <option value="hindi">HI</option>
             </select>
           )}
           {inputAvailable && (
@@ -787,9 +1021,22 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
             </button>
           )}
           {started && (
-            <button className="header-btn" onClick={handleReset}>New chat</button>
+            <button className="header-btn" onClick={handleReset} title="New chat">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                <g stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+                  <path d="M13 3v3.5h-3.5" />
+                  <path d="M12.7 7A5 5 0 1 0 8 13" />
+                </g>
+              </svg>
+              New
+            </button>
           )}
-          <button className="header-btn" onClick={onOpenAdmin} title="Open admin panel">⚙</button>
+          <button className="header-btn" onClick={onOpenAdmin} title="Admin">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.4" />
+              <path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.2 3.2l1.1 1.1M11.7 11.7l1.1 1.1M3.2 12.8l1.1-1.1M11.7 4.3l1.1-1.1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+            </svg>
+          </button>
           <GoogleSignIn
             user={user}
             googleClientId={googleClientId}
@@ -799,11 +1046,13 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
         </div>
       </div>
 
+      {/* ── Banner ── */}
       <div className="banner">
-        <span>🎉</span>
-        <span><strong>Season Sale:</strong> Up to 20% off on select plans</span>
+        <strong>Monsoon sale</strong>
+        <span>· up to 20% off select plans</span>
       </div>
 
+      {/* ── Voice status ── */}
       {voiceStatus && (
         <div className="voice-status">
           <span>{listening ? '🎙️' : '🔊'}</span>
@@ -811,24 +1060,19 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
         </div>
       )}
 
+      {/* ── Main content ── */}
       {!started ? (
-        <div className="welcome">
-          <div className="welcome-icon">🚗</div>
-          <h2>Find the Best Car Insurance</h2>
-          <p>Upload your RC card or previous policy — or just enter your registration number — and we'll do the rest.</p>
-          <button className="welcome-upload-cta" onClick={triggerFilePicker}>
-            <span>📎</span>
-            <span>Upload RC or Policy</span>
-          </button>
-          <div className="welcome-or">or type to start below</div>
-        </div>
+        <Welcome
+          user={user}
+          onStart={(mode) => {
+            if (mode === 'voice' && inputAvailable) toggleListening()
+            else setStarted(true)
+          }}
+          onUpload={triggerFilePicker}
+        />
       ) : (
         <div className="messages">
-          {messages.map((m, i) => {
-            if (m.role === 'bot') return <BotMessage key={i} content={m.content} />
-            if (m.role === 'attachment') return <AttachmentMessage key={i} name={m.content} />
-            return <UserMessage key={i} content={m.content} />
-          })}
+          {messages.map(renderMessage)}
           {progressEvents.map((p) => (
             <ProgressPill key={p.id} text={p.text} success={p.done} />
           ))}
@@ -840,6 +1084,7 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
 
       {renderInteractive()}
 
+      {/* ── Input dock ── */}
       <div className="input-area">
         <div className="input-row">
           <button
@@ -849,7 +1094,10 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
             aria-label="Attach file"
             title="Upload RC card or policy"
           >
-            📎
+            <svg width="18" height="18" viewBox="0 0 18 18">
+              <path d="M11.5 4.5L5 11a2.5 2.5 0 0 0 3.5 3.5L14 9a4 4 0 0 0-5.5-5.5L3 9"
+                stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
           </button>
           {inputAvailable && (
             <button
@@ -859,7 +1107,10 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
               aria-label="Speak"
               title="Speak"
             >
-              {listening ? '🎙️' : '🎤'}
+              <svg width="18" height="18" viewBox="0 0 18 18">
+                <rect x="6.5" y="2" width="5" height="9" rx="2.5" stroke="currentColor" strokeWidth="1.4" fill="none" />
+                <path d="M3.5 9a5.5 5.5 0 0 0 11 0M9 14.5V16" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+              </svg>
             </button>
           )}
           <div className="input-wrapper">
@@ -868,7 +1119,7 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
               value={input}
               onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
-              placeholder={started ? 'Type your message...' : 'Enter your car registration number...'}
+              placeholder={started ? 'Ask anything about your coverage...' : 'Enter your registration number...'}
               rows={1}
               disabled={loading}
             />
@@ -879,7 +1130,9 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
             disabled={!input.trim() || loading}
             aria-label="Send"
           >
-            ➤
+            <svg width="14" height="14" viewBox="0 0 14 14">
+              <path d="M2 7h10m-4-4l4 4-4 4" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
           </button>
         </div>
         <input
