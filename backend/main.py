@@ -8,6 +8,7 @@ import os
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote as urlquote
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -301,7 +302,7 @@ async def voice_speak(req: VoiceSpeakRequest):
     return StreamingResponse(
         audio_stream(),
         media_type="audio/mpeg",
-        headers={"X-Voice-Text": spoken[:300]},
+        headers={"X-Voice-Text": urlquote(spoken[:300])},
     )
 
 

@@ -298,7 +298,7 @@ export default function Chat({ onOpenAdmin }) {
       })
       if (!res.ok) throw new Error(`${res.status}`)
 
-      const spokenText = res.headers.get('X-Voice-Text') || ''
+      const spokenText = decodeURIComponent(res.headers.get('X-Voice-Text') || '')
       spokenTextRef.current = spokenText
       setVoiceStatus('Speaking...')
 
