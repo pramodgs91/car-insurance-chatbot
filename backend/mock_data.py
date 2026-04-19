@@ -382,6 +382,151 @@ def get_quotes(car_info: dict, policy_type: str = "comprehensive", ncb_years: in
     return quotes
 
 
+def find_closest_car(make: str, model: str, fuel_type: str | None = None) -> dict | None:
+    """Fuzzy-match a car in CAR_DATABASE by make/model/fuel_type."""
+    make_l = (make or "").strip().lower()
+    model_l = (model or "").strip().lower()
+    fuel_l = (fuel_type or "").strip().lower()
+
+    # Exact make + model + fuel
+    if make_l and model_l:
+        for car in CAR_DATABASE:
+            if car["make"].lower() == make_l and car["model"].lower() == model_l:
+                if not fuel_l or car["fuel"].lower() == fuel_l:
+                    return car
+        # Exact make + model (ignore fuel)
+        for car in CAR_DATABASE:
+            if car["make"].lower() == make_l and car["model"].lower() == model_l:
+                return car
+    # Partial model match
+    if model_l:
+        for car in CAR_DATABASE:
+            if model_l in car["model"].lower():
+                return car
+    # Partial make match
+    if make_l:
+        for car in CAR_DATABASE:
+            if make_l in car["make"].lower():
+                return car
+    return None
+
+
+def _ncb_carry_forward(prev_ncb_str: str | None, claims_made: str | None) -> int:
+    """Given previous NCB % string and claim status, return new NCB % as int."""
+    NCB_PROGRESSION = {0: 20, 20: 25, 25: 35, 35: 45, 45: 50, 50: 50}
+    try:
+        prev = int(str(prev_ncb_str or "0").strip("%").strip())
+    except (ValueError, TypeError):
+        prev = 0
+    if claims_made == "yes":
+        return 0
+    return NCB_PROGRESSION.get(prev, prev)
+
+
+def get_quotes_with_car_info(
+    car_info: dict,
+    policy_type: str = "comprehensive",
+    ncb_years: int = 0,
+) -> list[dict]:
+    """Generate quotes using actual extracted car info (make/model/year/IDV/NCB)."""
+    seed = _deterministic_seed(car_info.get("registration_number", "UNKNOWN"))
+    random.seed(seed)
+
+    # Resolve car segment/CC — try DB match first, then fallback defaults
+    db_car = find_closest_car(
+        car_info.get("make", ""),
+        car_info.get("model", ""),
+        car_info.get("fuel_type", ""),
+    )
+    segment = db_car["segment"] if db_car else "sedan"
+    cc_raw = db_car["cc"] if db_car else 1200
+    if car_info.get("fuel_type", "").lower() == "electric":
+        cc_raw = 0
+
+    calc_car = {
+        "registration_number": car_info.get("registration_number", "UNKNOWN"),
+        "segment": segment,
+        "cc": cc_raw,
+        "fuel": car_info.get("fuel_type", "petrol"),
+    }
+
+    # Resolve registration year
+    year_raw = car_info.get("year") or car_info.get("registration_year")
+    try:
+        reg_year = int(str(year_raw)[:4])
+    except (ValueError, TypeError):
+        reg_year = 2020
+
+    # IDV: use previous IDV from document if available (apply one year's depreciation)
+    prev_idv_raw = car_info.get("previous_idv")
+    if prev_idv_raw:
+        try:
+            prev_idv = int(str(prev_idv_raw).replace(",", "").strip())
+            car_age = 2026 - reg_year
+            # Incremental depreciation for one more year
+            incremental = {1: 0.15, 2: 0.05, 3: 0.10, 4: 0.10, 5: 0.10}.get(car_age, 0.10)
+            idv = max(int(prev_idv * (1 - incremental)), 50000)
+        except (ValueError, TypeError):
+            idv = _calculate_base_idv(calc_car, reg_year)
+    else:
+        idv = _calculate_base_idv(calc_car, reg_year)
+
+    # NCB: use session ncb_percent if available, else derive from ncb_years
+    ncb_from_session = car_info.get("ncb_percent")
+    claims = car_info.get("claims_made")
+    if ncb_from_session is not None:
+        ncb_percent = _ncb_carry_forward(str(ncb_from_session), claims)
+    else:
+        ncb_percent = {0: 0, 1: 20, 2: 25, 3: 35, 4: 45, 5: 50}.get(ncb_years, 50)
+
+    quotes = []
+    for insurer in INSURERS:
+        od_rate = random.uniform(0.028, 0.052)
+        od_premium = int(idv * od_rate)
+
+        cc = calc_car["cc"]
+        if cc == 0:
+            tp_premium = 2094
+        elif cc <= 1000:
+            tp_premium = 2094
+        elif cc <= 1500:
+            tp_premium = 3416
+        else:
+            tp_premium = 7897
+
+        if policy_type == "comprehensive":
+            ncb_discount = int(od_premium * ncb_percent / 100)
+            premium = od_premium - ncb_discount + tp_premium
+        else:
+            premium = tp_premium
+            idv = 0
+            ncb_discount = 0
+
+        variation = random.uniform(0.85, 1.15)
+        premium = int(premium * variation)
+
+        quotes.append({
+            "insurer_id": insurer["id"],
+            "insurer_name": insurer["name"],
+            "logo": insurer["logo"],
+            "idv": idv,
+            "premium": premium,
+            "od_premium": od_premium if policy_type == "comprehensive" else 0,
+            "tp_premium": tp_premium,
+            "ncb_discount": ncb_discount,
+            "ncb_percent": ncb_percent,
+            "network_garages": insurer["network_garages"],
+            "claim_settlement": insurer["claim_settlement"],
+            "instant_issuance": random.random() > 0.3,
+            "price_drop": random.random() > 0.6,
+            "policy_type": policy_type,
+        })
+
+    random.seed()
+    quotes.sort(key=lambda x: x["premium"])
+    return quotes
+
+
 def get_addon_prices(base_premium: int, car_info: dict) -> list[dict]:
     """Calculate add-on prices based on base premium."""
     seed = _deterministic_seed(car_info["registration_number"])

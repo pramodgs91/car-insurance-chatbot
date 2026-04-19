@@ -43,7 +43,28 @@ class GetCarDetails(Tool):
     def __init__(self, provider: CarProvider | None = None):
         self.provider = provider or MockCarProvider()
 
-    async def run(self, registration_number: str) -> dict:
+    async def run(self, registration_number: str, _session_data: dict | None = None) -> dict:
+        reg_norm = registration_number.upper().replace(" ", "").replace("-", "")
+
+        # If session already has extracted car info for this registration, use it
+        if _session_data:
+            car_info = _session_data.get("car_info", {})
+            session_reg = (car_info.get("registration_number") or "").upper().replace(" ", "")
+            if session_reg and session_reg == reg_norm and car_info.get("make"):
+                mock = await self.provider.fetch(registration_number) or {}
+                return {
+                    "registration_number": reg_norm,
+                    "make": car_info.get("make") or mock.get("make", ""),
+                    "model": car_info.get("model") or mock.get("model", ""),
+                    "variant": car_info.get("variant") or mock.get("variant", ""),
+                    "fuel_type": car_info.get("fuel_type") or mock.get("fuel_type", "petrol"),
+                    "year": str(car_info.get("year") or mock.get("registration_year", 2020)),
+                    "cc": mock.get("cc", 1200),
+                    "segment": mock.get("segment", "sedan"),
+                    "rto_state": mock.get("rto_state", ""),
+                    "source": "document",
+                }
+
         details = await self.provider.fetch(registration_number)
         if details is None:
             return {

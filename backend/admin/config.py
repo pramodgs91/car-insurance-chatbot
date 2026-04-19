@@ -57,6 +57,7 @@ VOICE_LANGUAGES = ("english", "hindi")
 VOICE_TONES = ("friendly", "professional", "sales")
 VOICE_DETAIL_LEVELS = ("quick", "moderate", "detailed")
 VOICE_SPEEDS = ("slow", "normal", "fast")
+VOICE_TTS_VOICES = ("alloy", "echo", "fable", "onyx", "nova", "shimmer")
 
 
 @dataclass
@@ -77,6 +78,7 @@ class VoiceSettings:
     auto_play: bool = False
     interruptible: bool = True
     speed: str = "normal"
+    tts_voice: str = "alloy"
 
 
 CURRENT_DEFAULTS_VERSION = 3
@@ -123,6 +125,7 @@ class RuntimeConfig:
                 "voice_tones": list(VOICE_TONES),
                 "voice_detail_levels": list(VOICE_DETAIL_LEVELS),
                 "voice_speeds": list(VOICE_SPEEDS),
+                "voice_tts_voices": list(VOICE_TTS_VOICES),
             }
 
     def public_snapshot(self) -> dict:
@@ -133,6 +136,7 @@ class RuntimeConfig:
             "voice_tones": snap["voice_tones"],
             "voice_detail_levels": snap["voice_detail_levels"],
             "voice_speeds": snap["voice_speeds"],
+            "voice_tts_voices": snap["voice_tts_voices"],
             "model_family": snap["model_family"],
         }
 
@@ -201,6 +205,7 @@ class RuntimeConfig:
             "auto_play",
             "interruptible",
             "speed",
+            "tts_voice",
         }
         unknown = set(patch) - valid
         if unknown:
@@ -219,6 +224,8 @@ class RuntimeConfig:
                     raise ValueError(f"Unknown voice detail level: {value}")
                 if key == "speed" and value not in VOICE_SPEEDS:
                     raise ValueError(f"Unknown voice speed: {value}")
+                if key == "tts_voice" and value not in VOICE_TTS_VOICES:
+                    raise ValueError(f"Unknown TTS voice: {value}")
                 setattr(voice, key, value)
             self._persist()
 
@@ -313,6 +320,8 @@ class RuntimeConfig:
                     voice.get("interruptible", self._data.voice.interruptible)
                 )
                 self._data.voice.speed = speed if speed in VOICE_SPEEDS else self._data.voice.speed
+                tts_voice = voice.get("tts_voice", self._data.voice.tts_voice)
+                self._data.voice.tts_voice = tts_voice if tts_voice in VOICE_TTS_VOICES else self._data.voice.tts_voice
 
             persisted_version = int(data.get("defaults_version", 1))
             self._data.defaults_version = persisted_version

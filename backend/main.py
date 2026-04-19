@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -94,11 +94,18 @@ class VoiceSettingsRequest(BaseModel):
     auto_play: bool | None = None
     interruptible: bool | None = None
     speed: str | None = None
+    tts_voice: str | None = None
 
 
 class ModelSettingsRequest(BaseModel):
     model_family: str | None = None
     task_models: dict[str, str] | None = None
+
+
+class VoiceTTSRequest(BaseModel):
+    text: str
+    voice: str = "alloy"
+    speed: float = 1.0
 
 
 class VoiceGuideRequest(BaseModel):
@@ -221,6 +228,21 @@ async def health():
 @app.get("/api/runtime/public")
 async def public_runtime():
     return runtime_config.public_snapshot()
+
+
+@app.post("/api/voice/tts")
+async def voice_tts(req: VoiceTTSRequest):
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="text is required")
+    try:
+        audio = await model_router.synthesize_speech(
+            text=req.text[:2000],
+            voice=req.voice,
+            speed=req.speed,
+        )
+        return Response(content=audio, media_type="audio/mpeg")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"TTS unavailable: {exc}") from exc
 
 
 @app.post("/api/voice/guide")

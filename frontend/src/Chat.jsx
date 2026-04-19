@@ -97,6 +97,7 @@ export default function Chat({ onOpenAdmin }) {
     autoPlay: false,
     interruptible: true,
     speed: 'normal',
+    ttsVoice: 'alloy',
   })
   const [voiceStatus, setVoiceStatus] = useState('')
   const [listening, setListening] = useState(false)
@@ -110,6 +111,7 @@ export default function Chat({ onOpenAdmin }) {
   const uxRef = useRef(null)
   const recognitionRef = useRef(null)
   const spokenTextRef = useRef('')
+  const currentAudioRef = useRef(null)
 
   const outputAvailable = runtimeConfig?.voice?.output_enabled ?? false
   const inputAvailable = runtimeConfig?.voice?.input_enabled ?? false
@@ -139,6 +141,7 @@ export default function Chat({ onOpenAdmin }) {
           autoPlay: Boolean(cfg.voice?.auto_play),
           interruptible: cfg.voice?.interruptible !== false,
           speed: cfg.voice?.speed || 'normal',
+          ttsVoice: cfg.voice?.tts_voice || 'alloy',
         })
       })
       .catch(() => {})
@@ -154,6 +157,10 @@ export default function Chat({ onOpenAdmin }) {
 
     return () => {
       cancelled = true
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause()
+        currentAudioRef.current = null
+      }
       if (typeof window !== 'undefined' && window.speechSynthesis) {
         window.speechSynthesis.cancel()
       }
@@ -164,6 +171,11 @@ export default function Chat({ onOpenAdmin }) {
   }, [])
 
   const stopSpeaking = useCallback(() => {
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause()
+      currentAudioRef.current.src = ''
+      currentAudioRef.current = null
+    }
     if (typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel()
     }
@@ -184,31 +196,72 @@ export default function Chat({ onOpenAdmin }) {
     )
   }, [])
 
-  const speakText = useCallback((text) => {
-    if (!voicePrefs.outputEnabled || typeof window === 'undefined' || !window.speechSynthesis || !text) return
-    const synth = window.speechSynthesis
-    if (voicePrefs.interruptible) synth.cancel()
-    else if (synth.speaking) return
+  const speakText = useCallback(async (text) => {
+    if (!voicePrefs.outputEnabled || !text) return
+    if (voicePrefs.interruptible) stopSpeaking()
+    else if (currentAudioRef.current && !currentAudioRef.current.ended) return
 
+    spokenTextRef.current = text
+    setVoiceStatus('Speaking...')
+
+    // Try backend TTS (gpt-4o-mini-tts) first
+    try {
+      const speedMap = { slow: 0.75, normal: 1.0, fast: 1.25 }
+      const res = await fetch('/api/voice/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text,
+          voice: voicePrefs.ttsVoice || 'alloy',
+          speed: speedMap[voicePrefs.speed] || 1.0,
+        }),
+      })
+      if (res.ok) {
+        const blob = await res.blob()
+        const url = URL.createObjectURL(blob)
+        const audio = new Audio(url)
+        currentAudioRef.current = audio
+        audio.play()
+        audio.onended = () => {
+          URL.revokeObjectURL(url)
+          currentAudioRef.current = null
+          if (spokenTextRef.current === text) setVoiceStatus('')
+          spokenTextRef.current = ''
+        }
+        audio.onerror = () => {
+          URL.revokeObjectURL(url)
+          currentAudioRef.current = null
+          if (spokenTextRef.current === text) setVoiceStatus('')
+          spokenTextRef.current = ''
+        }
+        return
+      }
+    } catch {
+      // Fall through to browser TTS
+    }
+
+    // Browser TTS fallback
+    if (typeof window === 'undefined' || !window.speechSynthesis) {
+      setVoiceStatus('')
+      spokenTextRef.current = ''
+      return
+    }
+    const synth = window.speechSynthesis
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.lang = getSpeechLang(voicePrefs.language)
     utterance.rate = SPEED_RATES[voicePrefs.speed] || 1
     const selectedVoice = pickVoice(voicePrefs.language)
     if (selectedVoice) utterance.voice = selectedVoice
-
-    utterance.onstart = () => setVoiceStatus('Speaking...')
     utterance.onend = () => {
       if (spokenTextRef.current === text) setVoiceStatus('')
       spokenTextRef.current = ''
     }
     utterance.onerror = () => {
-      if (spokenTextRef.current === text) setVoiceStatus('Voice playback failed')
+      if (spokenTextRef.current === text) setVoiceStatus('')
       spokenTextRef.current = ''
     }
-
-    spokenTextRef.current = text
     synth.speak(utterance)
-  }, [pickVoice, voicePrefs])
+  }, [pickVoice, stopSpeaking, voicePrefs])
 
   const requestVoiceGuide = useCallback(async ({
     message,

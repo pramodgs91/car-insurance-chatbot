@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Protocol
 from .base import Tool
-from mock_data import lookup_registration, get_quotes, get_addon_prices
+from mock_data import lookup_registration, get_quotes, get_quotes_with_car_info, get_addon_prices
 
 
 class QuotesProvider(Protocol):
@@ -57,8 +57,27 @@ class GetInsuranceQuotes(Tool):
         self.provider = provider or MockQuotesProvider()
 
     async def run(
-        self, registration_number: str, coverage_type: str = "comprehensive", ncb_years: int = 0
+        self,
+        registration_number: str,
+        coverage_type: str = "comprehensive",
+        ncb_years: int = 0,
+        _session_data: dict | None = None,
     ) -> dict:
+        # If session has extracted car info, use it for accurate IDV/NCB/car matching
+        if _session_data:
+            car_info = _session_data.get("car_info", {})
+            filled = _session_data.get("filled_fields", {})
+            session_reg = (car_info.get("registration_number") or "").upper().replace(" ", "")
+            reg_norm = registration_number.upper().replace(" ", "").replace("-", "")
+            if session_reg and session_reg == reg_norm and car_info.get("make"):
+                merged = {
+                    **car_info,
+                    "ncb_percent": filled.get("ncb_percent") or car_info.get("ncb_percent"),
+                    "claims_made": filled.get("claim_made") or car_info.get("claims_made"),
+                }
+                quotes = get_quotes_with_car_info(merged, policy_type=coverage_type, ncb_years=ncb_years)
+                return {"car": merged, "quotes": quotes[:8], "source": "document"}
+
         return await self.provider.fetch(registration_number, coverage_type, ncb_years)
 
 

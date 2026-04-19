@@ -123,31 +123,33 @@ def build_system_blocks(config: RuntimeConfig, rag_passages: list[dict] | None) 
     snapshot = config.snapshot()
     preset = snapshot["style_preset"]
 
-    static_parts = [
-        CORE_PROMPT,
-        STYLE_RULES.format(
-            style_name=snapshot["style"],
-            tone=preset["tone"],
-            verbosity=preset["verbosity"],
-            persuasion=preset["persuasion"],
-        ),
+    # Block 1: Static core (cached independently — large, rarely changes)
+    core_text = CORE_PROMPT + "\n\n" + STYLE_RULES.format(
+        style_name=snapshot["style"],
+        tone=preset["tone"],
+        verbosity=preset["verbosity"],
+        persuasion=preset["persuasion"],
+    )
+    blocks: list[dict] = [
+        {"type": "text", "text": core_text, "cache_control": {"type": "ephemeral"}}
     ]
 
+    # Block 2: Custom instructions (separate cached block — changes when admin edits)
+    # Kept separate so Block 1 cache stays warm even when instructions change.
     enabled = [block for block in snapshot["custom_instructions"] if block["enabled"]]
     if enabled:
-        static_parts.append(
-            "\n## Custom instructions\n"
-            + "\n\n".join(f"### {block['title']}\n{block['content']}" for block in enabled)
+        custom_text = (
+            "## Operator custom instructions\n"
+            "IMPORTANT: The following instructions come from the operator and MUST be "
+            "followed in addition to the core rules above. They take precedence over "
+            "default behaviour when there is any conflict.\n\n"
+            + "\n\n".join(f"### {b['title']}\n{b['content']}" for b in enabled)
+        )
+        blocks.append(
+            {"type": "text", "text": custom_text, "cache_control": {"type": "ephemeral"}}
         )
 
-    blocks: list[dict] = [
-        {
-            "type": "text",
-            "text": "\n".join(static_parts),
-            "cache_control": {"type": "ephemeral"},
-        }
-    ]
-
+    # Block 3: RAG passages (dynamic — not cached, changes every turn)
     if rag_passages:
         rendered = "\n\n".join(
             f"[{i + 1}] From \"{p['doc_name']}\": {p['text']}"
@@ -287,7 +289,7 @@ class Agent:
                     }
 
                 async def run_one(tool_call: dict) -> tuple[dict, dict]:
-                    result = await self.tools.execute(tool_call["name"], tool_call["input"])
+                    result = await self.tools.execute(tool_call["name"], tool_call["input"], session_data=session_data)
                     return tool_call, result
 
                 results = await asyncio.gather(*(run_one(call) for call in outcome["tool_calls"]))

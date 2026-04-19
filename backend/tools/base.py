@@ -61,11 +61,13 @@ class ToolRegistry:
     def openai_schemas(self) -> list[dict]:
         return [t.openai_schema() for t in self._tools.values()]
 
-    async def execute(self, name: str, input_data: dict) -> dict:
+    async def execute(self, name: str, input_data: dict, session_data: dict | None = None) -> dict:
         tool = self._tools.get(name)
         if tool is None:
             return {"error": f"Unknown tool: {name}"}
         try:
+            return await tool.run(**input_data, _session_data=session_data)
+        except TypeError:
             return await tool.run(**input_data)
         except Exception as exc:  # pragma: no cover - defensive
             return {"error": f"Tool execution failed: {exc}"}

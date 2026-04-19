@@ -389,6 +389,25 @@ class OpenAIProvider:
         content = response.choices[0].message.content or ""
         return content.strip()
 
+    async def synthesize_speech(
+        self,
+        model: str,
+        text: str,
+        voice: str = "alloy",
+        speed: float = 1.0,
+    ) -> bytes:
+        try:
+            response = await self.client.audio.speech.create(
+                model=model,
+                voice=voice,
+                input=text,
+                speed=max(0.25, min(speed, 4.0)),
+                response_format="mp3",
+            )
+            return await response.aread()
+        except Exception as exc:
+            raise ProviderError(str(exc)) from exc
+
     async def extract_document(
         self,
         model: str,
@@ -538,3 +557,8 @@ class ModelRouter:
             prompt=prompt,
             tool_schema=tool_schema,
         )
+
+    async def synthesize_speech(self, text: str, voice: str = "alloy", speed: float = 1.0) -> bytes:
+        # TTS is always OpenAI — Anthropic has no TTS offering.
+        provider = self._provider("openai")
+        return await provider.synthesize_speech(model="gpt-4o-mini-tts", text=text, voice=voice, speed=speed)

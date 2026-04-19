@@ -24,6 +24,7 @@ const VOICE_SELECT_ROWS = [
   { key: 'tone', label: 'Tone', options: ['friendly', 'professional', 'sales'] },
   { key: 'detail_level', label: 'Detail level', options: ['quick', 'moderate', 'detailed'] },
   { key: 'speed', label: 'Speed', options: ['slow', 'normal', 'fast'] },
+  { key: 'tts_voice', label: 'TTS Voice', options: ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'] },
 ]
 
 const TASK_LABELS = {

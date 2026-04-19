@@ -198,6 +198,11 @@ def merge_into_session(session_data: dict, extracted: dict) -> dict:
         for key in ("registration_number", "make", "model", "variant", "year", "fuel_type", "owner_name", "rto_code")
         if key in extracted
     }
+    if extracted.get("idv"):
+        filled["previous_idv"] = extracted["idv"]
+        applied["previous_idv"] = extracted["idv"]
+        car_fields["previous_idv"] = extracted["idv"]
+
     if car_fields:
         session_data["car_info"] = {**session_data.get("car_info", {}), **car_fields}
         applied.update(car_fields)
