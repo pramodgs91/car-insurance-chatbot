@@ -265,7 +265,7 @@ function Welcome({ onStart, onUpload, user }) {
 
       <div className="welcome-actions">
         <button className="cta-primary" onClick={() => onStart()}>
-          <span>Start in 60 seconds</span>
+          <span>Finish in 60 seconds</span>
           <span className="cta-arrow">
             <svg width="14" height="14" viewBox="0 0 14 14">
               <path d="M2 7h10m-4-4l4 4-4 4" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round" />
@@ -1082,10 +1082,10 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
         </div>
       )}
 
-      {renderInteractive()}
+      {started && renderInteractive()}
 
       {/* ── Input dock ── */}
-      <div className="input-area">
+      {started && <div className="input-area">
         <div className="input-row">
           <button
             className="attach-btn"
@@ -1143,7 +1143,7 @@ export default function Chat({ onOpenAdmin, user, googleClientId, onSignIn, onSi
           style={{ display: 'none' }}
           onChange={handleFileChange}
         />
-      </div>
+      </div>}
     </>
   )
 }
