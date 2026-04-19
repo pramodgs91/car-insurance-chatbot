@@ -303,21 +303,36 @@ export default function Chat({ onOpenAdmin }) {
       setVoiceStatus('Speaking...')
 
       // Try MediaSource streaming — playback starts on first chunk (~200ms)
+      // tee() the body so blob fallback has its own stream if MediaSource fails
       const mimeType = 'audio/mpeg'
       if (
         typeof MediaSource !== 'undefined' &&
         MediaSource.isTypeSupported?.(mimeType) &&
         res.body
       ) {
+        const [stream1, stream2] = res.body.tee()
         try {
-          await _playStreamingAudio(res.body, mimeType)
+          await _playStreamingAudio(stream1, mimeType)
+          stream2.cancel()
           return spokenText
         } catch {
-          // fall through to blob
+          // fall through to blob using stream2
+          const blob = await new Response(stream2).blob()
+          const url = URL.createObjectURL(blob)
+          const audio = new Audio(url)
+          currentAudioRef.current = audio
+          audio.play()
+          audio.onended = () => {
+            URL.revokeObjectURL(url)
+            currentAudioRef.current = null
+            setVoiceStatus('')
+            spokenTextRef.current = ''
+          }
+          return spokenText
         }
       }
 
-      // Blob fallback (Safari, Firefox)
+      // Blob fallback (Safari, Firefox — no MediaSource support)
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
