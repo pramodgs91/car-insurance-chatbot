@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from admin import AdminSession, RuntimeConfig, verify_password
 from admin.auth import admin_configured
+from version import VERSION
 from agent import Agent
 from extraction import extract_from_upload, format_for_agent, merge_into_session
 from llm import ModelRouter
@@ -236,7 +237,7 @@ async def reset_session(session_id: str | None = None):
 
 @app.get("/api/health")
 async def health():
-    return {"status": "healthy", "admin_configured": admin_configured()}
+    return {"status": "healthy", "admin_configured": admin_configured(), "version": VERSION}
 
 
 @app.get("/api/runtime/public")

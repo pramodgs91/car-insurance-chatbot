@@ -46,11 +46,15 @@ export default function Admin({ onClose }) {
   const [newInstruction, setNewInstruction] = useState({ title: '', content: '' })
   const [successMsg, setSuccessMsg] = useState('')
   const [adminAvailable, setAdminAvailable] = useState(true)
+  const [appVersion, setAppVersion] = useState('')
   const [taskModelDraft, setTaskModelDraft] = useState({})
   const fileRef = useRef(null)
 
   useEffect(() => {
-    getHealth().then((h) => setAdminAvailable(h.admin_configured)).catch(() => {})
+    getHealth().then((h) => {
+      setAdminAvailable(h.admin_configured)
+      if (h.version) setAppVersion(h.version)
+    }).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -277,6 +281,7 @@ export default function Admin({ onClose }) {
     <div className="admin-overlay">
       <div className="admin-header">
         <h2>Admin Panel</h2>
+        {appVersion && <span className="admin-version">v{appVersion}</span>}
         <button className="admin-close" onClick={handleLogout}>Logout</button>
         <button className="admin-close" onClick={onClose}>Close</button>
       </div>
